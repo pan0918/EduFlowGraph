@@ -1,0 +1,89 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: light;
+    --font-sans: "Avenir Next", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    --font-serif: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
+    --background: #faf7f1;
+    --foreground: #1f1d1b;
+    --card: #fffdf9;
+    --card-foreground: #1f1d1b;
+    --primary: #b0501e;
+    --primary-foreground: #ffffff;
+    --secondary: #ece5d8;
+    --secondary-foreground: #1f1d1b;
+    --muted: #ece5d8;
+    --muted-foreground: #6c665f;
+    --accent: #f4ede2;
+    --accent-foreground: #1f1d1b;
+    --border: #ddd3c5;
+    --input: #ddd3c5;
+    --ring: #b0501e;
+  }
+
+  * {
+    @apply border-[color:var(--border)];
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+  }
+
+  html,
+  body {
+    height: 100%;
+  }
+
+  body {
+    @apply font-sans antialiased;
+    background: var(--background);
+    color: var(--foreground);
+  }
+
+  button,
+  input,
+  select,
+  textarea {
+    font: inherit;
+  }
+}
+
+@layer components {
+  .surface-card {
+    @apply rounded-[28px] border bg-[var(--card)] shadow-surface;
+  }
+
+  .assistant-markdown .katex-display {
+    margin: 1rem 0 1.25rem;
+    max-width: 100%;
+    overflow-x: auto;
+    overflow-y: hidden;
+    border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+    border-radius: 18px;
+    background: color-mix(in srgb, var(--card) 88%, var(--accent));
+    padding: 0.75rem 1rem;
+  }
+
+  .assistant-markdown .katex {
+    font-size: 1.03em;
+  }
+
+  .assistant-markdown .katex-display > .katex {
+    min-width: max-content;
+  }
+}
+
+::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 999px;
+}

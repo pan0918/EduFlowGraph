@@ -1,0 +1,31 @@
+{
+  "name": "eduflowgraph-web",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "node ./node_modules/next/dist/bin/next dev --webpack",
+    "build": "next build --webpack",
+    "start": "next start"
+  },
+  "dependencies": {
+    "clsx": "^2.1.1",
+    "katex": "^0.16.22",
+    "lucide-react": "^0.562.0",
+    "next": "^16.2.3",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "react-markdown": "^10.1.0",
+    "rehype-katex": "^7.0.1",
+    "remark-gfm": "^4.0.0",
+    "remark-math": "^6.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8",
+    "tailwindcss": "^3.4.17",
+    "typescript": "^5"
+  }
+}

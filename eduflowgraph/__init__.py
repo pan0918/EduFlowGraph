@@ -1,0 +1,2 @@
+"""EduFlowGraph-Lite demo package."""
+

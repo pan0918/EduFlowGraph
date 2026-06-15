@@ -1,0 +1,13 @@
+.venv/
+.venv
+__pycache__/
+*.pyc
+.pytest_cache/
+data/*.jsonl
+data/graph_nodes.json
+data/graph_edges.json
+.env
+.DS_Store
+web/.next/
+web/node_modules
+web/tsconfig.tsbuildinfo
