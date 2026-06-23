@@ -3,6 +3,7 @@
 __pycache__/
 *.pyc
 .pytest_cache/
+.worktrees/
 data/*.jsonl
 data/conversations/*.jsonl
 data/graph_nodes.json
