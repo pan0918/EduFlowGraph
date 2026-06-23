@@ -7,9 +7,9 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from eduflowgraph.config import load_settings_from_mapping
-from eduflowgraph.web_app import app, get_pipeline
-import eduflowgraph.web_app as web_app_module
+from EduFlowGraph.config import load_settings_from_mapping
+from EduFlowGraph.web_app import app, get_pipeline
+import EduFlowGraph.web_app as web_app_module
 
 
 class WebAppApiTest(unittest.TestCase):
@@ -51,15 +51,17 @@ class WebAppApiTest(unittest.TestCase):
                 if chunk.startswith("data: ")
             ]
             context_event = next(event for event in events if event.get("type") == "context")
-            self.assertIn("user_event", context_event)
-            self.assertEqual("user_message", context_event["user_event"]["event_type"])
+            self.assertIn("context", context_event)
+            self.assertIn("profile", context_event["context"])
             self.assertTrue(any(event.get("type") == "delta" for event in events))
+            self.assertTrue(any(event.get("type") == "answer" for event in events))
             self.assertTrue(any(event.get("type") == "final" for event in events))
 
     def test_pipeline_cache_separates_distinct_runtime_profiles(self):
-        settings_a = load_settings_from_mapping(
-            {
-                "data_dir": "data",
+        with tempfile.TemporaryDirectory() as tmp:
+            settings_a = load_settings_from_mapping(
+                {
+                    "data_dir": tmp,
                 "runtime": {
                     "llm": {
                         "provider": "openai-compatible",
@@ -76,11 +78,11 @@ class WebAppApiTest(unittest.TestCase):
                         "model_id": "Qwen/Qwen3-VL-Embedding-8B",
                     },
                 },
-            }
-        )
-        settings_b = load_settings_from_mapping(
-            {
-                "data_dir": "data",
+                }
+            )
+            settings_b = load_settings_from_mapping(
+                {
+                    "data_dir": tmp,
                 "runtime": {
                     "llm": {
                         "provider": "openai-compatible",
@@ -97,15 +99,15 @@ class WebAppApiTest(unittest.TestCase):
                         "model_id": "text-embedding-3-small",
                     },
                 },
-            }
-        )
+                }
+            )
 
-        first = get_pipeline(settings_a)
-        second = get_pipeline(settings_b)
+            first = get_pipeline(settings_a)
+            second = get_pipeline(settings_b)
 
-        self.assertIsNot(first, second)
-        self.assertEqual("gpt-4o-mini", second.llm.chat_model)
-        self.assertEqual("text-embedding-3-small", second.llm.embedding_model)
+            self.assertIsNot(first, second)
+            self.assertEqual("gpt-4o-mini", second.llm.chat_model)
+            self.assertEqual("text-embedding-3-small", second.llm.embedding_model)
 
     def test_default_dashboard_is_empty_without_seed_content(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -119,12 +121,19 @@ class WebAppApiTest(unittest.TestCase):
 
             self.assertEqual(200, response.status_code)
             payload = response.json()
-            self.assertEqual([], payload["events"])
             self.assertEqual([], payload["concepts"])
             self.assertEqual([], payload["episodes"])
             self.assertEqual([], payload["skills"])
             self.assertEqual([], payload["edges"])
-            self.assertIn("retrieval_health", payload)
+            self.assertEqual([], payload["memory_events"])
+            self.assertEqual(0, payload["memory_flow_count"])
+            self.assertEqual(
+                {"learner_model", "strategy_model", "context_model"},
+                set(payload["profile"]["models"]),
+            )
+            self.assertEqual(0, payload["profile"]["revision_count"])
+            self.assertEqual("ok", payload["profile"]["health"]["status"])
+            self.assertEqual("sqlite", payload["storage_health"]["backend"])
 
     def test_api_responses_disable_http_caching(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -159,7 +168,7 @@ class WebAppApiTest(unittest.TestCase):
             self.assertIn("rebuilt_nodes", payload)
             self.assertIn("snapshot", payload)
 
-    def test_delete_event_and_reset_memory_update_persisted_snapshot(self):
+    def test_reset_memory_clears_turns_and_persisted_snapshot(self):
         with tempfile.TemporaryDirectory() as tmp:
             settings = load_settings_from_mapping({"data_dir": tmp, "provider": "mock"})
             with patch.object(web_app_module, "_settings", return_value=settings):
@@ -169,26 +178,70 @@ class WebAppApiTest(unittest.TestCase):
                     json={"session_id": "session_delete", "message": "请解释条件概率。"},
                 )
                 self.assertEqual(200, chat_response.status_code)
-                user_event_id = chat_response.json()["user_event"]["event_id"]
-
-                delete_response = client.delete(f"/api/events/{user_event_id}")
-                self.assertEqual(200, delete_response.status_code)
-                self.assertFalse(
-                    any(
-                        event["event_id"] == user_event_id
-                        for event in delete_response.json()["snapshot"]["events"]
-                    )
-                )
+                before = client.get("/api/sessions/session_delete/turns")
+                self.assertEqual(1, len(before.json()["turns"]))
 
                 reset_response = client.post("/api/reset-memory", json={"data_dir": tmp})
+                after = client.get("/api/sessions/session_delete/turns")
 
             self.assertEqual(200, reset_response.status_code)
+            self.assertEqual([], after.json()["turns"])
             snapshot = reset_response.json()["snapshot"]
-            self.assertEqual([], snapshot["events"])
             self.assertEqual([], snapshot["concepts"])
             self.assertEqual([], snapshot["episodes"])
             self.assertEqual([], snapshot["skills"])
             self.assertEqual([], snapshot["edges"])
+            self.assertEqual([], snapshot["memory_events"])
+            self.assertEqual(0, snapshot["memory_flow_count"])
+            self.assertEqual(0, snapshot["profile"]["revision_count"])
+
+    def test_chat_api_returns_profile_trace_after_profile_is_learned(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            settings = load_settings_from_mapping({"data_dir": tmp, "provider": "mock"})
+            with patch.object(web_app_module, "_settings", return_value=settings):
+                client = TestClient(app)
+                first = client.post(
+                    "/api/chat",
+                    json={
+                        "session_id": "session_profile_trace",
+                        "message": "我学公式时喜欢先看具体例子，再看抽象定义。",
+                        "memory_mode": "memory_augmented",
+                    },
+                )
+                second = client.post(
+                    "/api/chat",
+                    json={
+                        "session_id": "session_profile_trace",
+                        "message": "讲条件概率时我还是喜欢先看具体例子，再看公式。",
+                        "memory_mode": "memory_augmented",
+                    },
+                )
+                extracted = client.post(
+                    "/api/extract",
+                    json={"session_id": "session_profile_trace"},
+                )
+                third = client.post(
+                    "/api/chat",
+                    json={
+                        "session_id": "session_profile_trace",
+                        "message": "请解释条件概率公式。",
+                        "memory_mode": "memory_augmented",
+                    },
+                )
+
+            self.assertEqual(200, first.status_code)
+            self.assertEqual(200, second.status_code)
+            self.assertEqual(200, extracted.status_code)
+            self.assertEqual(200, third.status_code)
+            context = third.json()["context"]
+            self.assertTrue(
+                any(
+                    model["summary"]
+                    for model in context["profile"]["models"].values()
+                )
+            )
+            self.assertTrue(context["profile_context"])
+            self.assertGreaterEqual(third.json()["snapshot"]["profile"]["revision_count"], 1)
 
     def test_reset_memory_uses_request_data_dir_instead_of_default_data_dir(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -214,18 +267,14 @@ class WebAppApiTest(unittest.TestCase):
             )
             default_data.joinpath("graph_nodes.json").write_text('{"sentinel": true}', encoding="utf-8")
             default_data.joinpath("graph_edges.json").write_text('[{"sentinel": true}]', encoding="utf-8")
-            target_event = {
-                **sentinel_event,
-                "event_id": "event_target",
-                "session_id": "session_target",
-                "content": "target",
-            }
-            target_data.joinpath("dataflow.jsonl").write_text(
-                json.dumps(target_event, ensure_ascii=False) + "\n",
-                encoding="utf-8",
-            )
-            target_data.joinpath("graph_nodes.json").write_text('{"target": true}', encoding="utf-8")
-            target_data.joinpath("graph_edges.json").write_text('[{"target": true}]', encoding="utf-8")
+            target_settings = load_settings_from_mapping({
+                "data_dir": str(target_data),
+                "provider": "mock",
+                "storage_backend": "sqlite",
+            })
+            target_pipeline = get_pipeline(target_settings)
+            target_pipeline.handle_user_message("session_target", "请解释条件概率。")
+            self.assertEqual(1, len(target_pipeline.conv_log.list_turns("session_target")))
 
             previous_cwd = Path.cwd()
             os.chdir(default_cwd)
@@ -242,9 +291,9 @@ class WebAppApiTest(unittest.TestCase):
             )
             self.assertEqual('{"sentinel": true}', default_data.joinpath("graph_nodes.json").read_text(encoding="utf-8"))
             self.assertEqual('[{"sentinel": true}]', default_data.joinpath("graph_edges.json").read_text(encoding="utf-8"))
-            self.assertEqual("", target_data.joinpath("dataflow.jsonl").read_text(encoding="utf-8"))
-            self.assertEqual("{}", target_data.joinpath("graph_nodes.json").read_text(encoding="utf-8").strip())
-            self.assertEqual("[]", target_data.joinpath("graph_edges.json").read_text(encoding="utf-8").strip())
+            reset_pipeline = get_pipeline(target_settings)
+            self.assertEqual([], reset_pipeline.conv_log.list_turns("session_target"))
+            self.assertEqual([], reset_pipeline.dashboard()["episodes"])
 
 
 if __name__ == "__main__":

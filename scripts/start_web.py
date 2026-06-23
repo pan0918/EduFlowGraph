@@ -65,6 +65,11 @@ def main() -> None:
             )
 
     backend_env = os.environ.copy()
+    # Ensure the project root is always in PYTHONPATH so EduFlowGraph is importable
+    existing_pythonpath = backend_env.get("PYTHONPATH", "")
+    backend_env["PYTHONPATH"] = (
+        str(PROJECT_ROOT) + (":" + existing_pythonpath if existing_pythonpath else "")
+    )
     frontend_env = os.environ.copy()
     frontend_env["NEXT_PUBLIC_API_BASE"] = f"http://127.0.0.1:{backend_port}"
 
@@ -72,7 +77,7 @@ def main() -> None:
         ".venv/bin/python",
         "-m",
         "uvicorn",
-        "eduflowgraph.web_app:app",
+        "EduFlowGraph.web_app:app",
         "--host",
         "127.0.0.1",
         "--port",

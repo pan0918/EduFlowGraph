@@ -1,2 +1,1 @@
-"""EduFlowGraph-Lite demo package."""
-
+"""EduFlowGraph – memory-augmented AI tutoring engine."""

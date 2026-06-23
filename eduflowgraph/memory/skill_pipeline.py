@@ -6,8 +6,8 @@ import re
 from collections import Counter
 from typing import Any
 
-from .schemas import utc_now
-from .skills import (
+from ..schemas import utc_now
+from ..skills import (
     ACTION_TO_SUCCESS_CRITERIA,
     DIFFICULTY_PATTERNS,
     DIFFICULTY_PATTERN_TAXONOMY,
@@ -93,26 +93,25 @@ class HeuristicSkillEvidenceExtractor:
     def extract(
         self,
         episode: dict[str, Any],
-        events: list[dict[str, Any]],
+        turns: list[dict[str, Any]],
         *,
         concept_names: list[str],
         concept_ids: list[str],
     ) -> dict[str, Any]:
-        summary = episode.get("summary", {})
-        learner_problem = episode.get("learner_problem", {})
-        tutor_action = episode.get("tutor_action", {})
-        outcome = episode.get("learning_outcome", {})
-        text = "\n".join(str(event.get("content", "")) for event in events)
+        learner = episode.get("learner", {})
+        tutor = episode.get("tutor", {})
+        outcome = episode.get("outcome", {})
+        text = "\n".join(str(t.get("content", t.get("user_message", ""))) for t in turns)
         lower = text.lower()
         student_text = "\n".join(
-            str(event.get("content", ""))
-            for event in events
-            if str(event.get("actor", "")).lower() == "student"
+            str(t.get("content", t.get("user_message", "")))
+            for t in turns
+            if str(t.get("actor", t.get("role", ""))).lower() in ("student", "user")
         )
         assistant_text = "\n".join(
-            str(event.get("content", ""))
-            for event in events
-            if str(event.get("actor", "")).lower() == "assistant"
+            str(t.get("content", t.get("assistant_message", "")))
+            for t in turns
+            if str(t.get("actor", t.get("role", ""))).lower() in ("assistant", "tutor")
         )
         assistant_lower = assistant_text.lower()
 
@@ -122,7 +121,7 @@ class HeuristicSkillEvidenceExtractor:
             if name in TEACHING_ACTIONS and name not in actions:
                 actions.append(name)
 
-        main_strategy = str(tutor_action.get("main_strategy", "")).strip()
+        main_strategy = str(tutor.get("strategy", "")).strip()
         add_action(main_strategy)
 
         if (
@@ -133,33 +132,36 @@ class HeuristicSkillEvidenceExtractor:
         ):
             add_action("contrastive_explanation")
         if any(token in assistant_text for token in ["第一步", "第二步", "逐步", "一步一步", "分步骤"]):
-            add_action("step_by_step_explanation")
+            add_action("step_by_step_guidance")
         if any(token in assistant_text for token in ["例题", "完整解法", "示范", "按照这个例子"]) or "worked example" in assistant_lower:
             add_action("worked_example")
         if re.search(r"\b10\b|\b100\b", assistant_text) or "100人" in assistant_text or "小例子" in assistant_text or "心算" in assistant_text:
-            add_action("minimal_numeric_example")
+            add_action("concrete_example")
         if any(token in assistant_text for token in ["公式", "推导", "derive", "log-derivative", "log 导数"]):
             add_action("formula_decomposition")
         if any(token in assistant_text for token in ["复述", "用自己的话", "你来说说", "你能说出", "你自己解释"]):
-            add_action("student_self_explanation")
-        if bool(tutor_action.get("used_assessment")) or any(
+            add_action("self_explanation_prompt")
+        if any(
             token in assistant_text for token in ["检查", "练习", "判断", "确认", "小检查", "验证一下"]
         ):
             add_action("diagnostic_check")
         if "你觉得" in assistant_text or "为什么" in assistant_text:
             add_action("socratic_questioning")
+        if any(token in assistant_text for token in ["相似任务", "自己试试", "独立完成", "减少提示"]):
+            add_action("guided_practice")
+        if any(token in assistant_text for token in ["错在", "纠正", "不对", "修正", "错误"]):
+            add_action("error_correction")
 
         if not actions:
             add_action("worked_example")
         actions = actions[:4]
 
-        misconceptions = " ".join(str(item) for item in learner_problem.get("misconceptions", []))
-        detected_problem = str(learner_problem.get("detected_problem", ""))
-        title = str(summary.get("title", ""))
+        obstacle = str(learner.get("obstacle", ""))
+        title = str(episode.get("title", ""))
 
         difficulty_pattern = "unknown"
         if any(
-            token in f"{text} {misconceptions} {detected_problem} {title}"
+            token in f"{text} {obstacle} {title}"
             for token in ["P(A|B)", "P(B|A)", "检测准确率", "后验概率", "方向差异", "条件方向"]
         ) or "direction" in lower:
             difficulty_pattern = "direction_confusion"
@@ -168,20 +170,25 @@ class HeuristicSkillEvidenceExtractor:
         ):
             difficulty_pattern = "symbol_grounding"
         elif any(token in student_text for token in ["不会做", "不知道怎么开始"]) or (
-            main_strategy == "step_by_step_explanation"
+            main_strategy == "step_by_step_guidance"
             and any(token in assistant_text for token in ["逐步", "一步一步", "分步骤"])
         ):
             difficulty_pattern = "procedural_gap"
         elif any(token in student_text for token in ["换一个", "相似题", "迁移"]):
             difficulty_pattern = "transfer_failure"
         elif any(token in student_text for token in ["太抽象", "没直觉", "没有感觉"]) or (
-            "minimal_numeric_example" in actions and difficulty_pattern == "unknown"
+            "concrete_example" in actions and difficulty_pattern == "unknown"
         ):
             difficulty_pattern = "abstraction_gap"
+        elif any(token in student_text for token in ["搞不清", "混淆", "分不清"]) or (
+            "混淆" in obstacle or "困惑" in obstacle
+        ):
+            difficulty_pattern = "conceptual_confusion"
 
-        result = str(outcome.get("result", "unresolved"))
-        score = float(outcome.get("score", 0.0))
-        level = episode_outcome_level(result, score)
+        outcome_status = str(outcome.get("status", "unresolved"))
+        outcome_evidence = str(outcome.get("evidence", ""))
+
+        concept_scope_list = concept_names or []
 
         return {
             "episode_id": episode.get("episode_id", ""),
@@ -190,17 +197,19 @@ class HeuristicSkillEvidenceExtractor:
             "concept_names": concept_names,
             "teaching_actions": actions,
             "difficulty_pattern": difficulty_pattern if difficulty_pattern in DIFFICULTY_PATTERNS else "unknown",
+            "concept_scope": concept_scope_list,
+            "outcome_signal": outcome_status,
             "outcome": {
-                "result": result,
-                "score": score,
-                "understanding_after": str(outcome.get("understanding_after", "unknown")),
+                "result": outcome_status,
+                "score": 0.0,
+                "understanding_after": "unknown",
             },
-            "learning_delta": level >= 2,
-            "evidence_summary": str(outcome.get("evidence") or summary.get("short_summary") or ""),
+            "learning_delta": outcome_status in {"success", "partial_success"},
+            "evidence_summary": outcome_evidence or str(episode.get("summary", "")),
             "source_event_ids": [
-                str(event.get("event_id"))
-                for event in events
-                if str(event.get("event_id", "")).strip()
+                str(t.get("event_id"))
+                for t in turns
+                if str(t.get("event_id", "")).strip()
             ],
         }
 
@@ -208,14 +217,14 @@ class HeuristicSkillEvidenceExtractor:
 def coerce_skill_evidence_payload_from_llm(
     raw: str,
     episode: dict[str, Any],
-    events: list[dict[str, Any]],
+    turns: list[dict[str, Any]],
     *,
     concept_names: list[str],
     concept_ids: list[str],
 ) -> dict[str, Any]:
     fallback = HeuristicSkillEvidenceExtractor().extract(
         episode,
-        events,
+        turns,
         concept_names=concept_names,
         concept_ids=concept_ids,
     )
@@ -233,6 +242,16 @@ def coerce_skill_evidence_payload_from_llm(
             return fallback
         fallback["teaching_actions"] = actions[:4]
         fallback["difficulty_pattern"] = difficulty_pattern
+        concept_scope = [
+            str(item).strip()
+            for item in payload.get("concept_scope", fallback.get("concept_scope", []))
+            if str(item).strip()
+        ]
+        if concept_scope:
+            fallback["concept_scope"] = concept_scope
+        fallback["outcome_signal"] = str(
+            payload.get("outcome_signal") or fallback.get("outcome_signal", "unresolved")
+        ).strip()
         fallback["evidence_summary"] = str(
             payload.get("evidence_summary") or fallback["evidence_summary"]
         ).strip()
@@ -255,6 +274,7 @@ def _skill_name(pattern: str, primary_action: str) -> str:
         "transfer_failure": "用例题示范支持迁移到相似题",
         "procedural_gap": "通过引导拆解建立可执行步骤",
         "abstraction_gap": "用具体例子落地抽象概念",
+        "conceptual_confusion": "通过对比和追问澄清概念混淆",
     }
     return templates.get(pattern, f"用{primary_action}处理{pattern.replace('_', ' ')}")
 
@@ -281,6 +301,10 @@ def _pattern_success_criteria(pattern: str) -> list[str]:
             "学习者能把具体例子映射回抽象概念。",
             "学习者能在看过例子后复述抽象思想。",
         ],
+        "conceptual_confusion": [
+            "学习者能清楚区分容易混淆的概念。",
+            "学习者能用自己的话解释核心概念的定义和边界。",
+        ],
     }
     return criteria.get(pattern, [])
 
@@ -296,7 +320,7 @@ def _build_skill_id(pattern: str, actions: list[str], concept_scope: list[str]) 
 
 
 def _edge_weight_from_evidence(evidence: dict[str, Any]) -> float:
-    result = str(evidence.get("outcome", {}).get("result", "unresolved"))
+    result = str(evidence.get("outcome", {}).get("result", evidence.get("outcome_signal", "unresolved")))
     score = float(evidence.get("outcome", {}).get("score", 0.0))
     level = episode_outcome_level(result, score)
     if level >= 3:
@@ -309,7 +333,7 @@ def _edge_weight_from_evidence(evidence: dict[str, Any]) -> float:
 def _confidence_from_window(evidences: list[dict[str, Any]]) -> float:
     if not evidences:
         return 0.0
-    avg_score = sum(float(item["outcome"]["score"]) for item in evidences) / len(evidences)
+    avg_score = sum(float(item.get("outcome", {}).get("score", 0.0)) for item in evidences) / len(evidences)
     bonus = 0.08 * min(len(evidences), 4)
     if has_learning_improvement(evidences):
         bonus += 0.1
@@ -323,7 +347,7 @@ def has_learning_improvement(evidences: list[dict[str, Any]]) -> bool:
         return False
     levels = [
         episode_outcome_level(
-            str(item.get("outcome", {}).get("result", "unresolved")),
+            str(item.get("outcome", {}).get("result", item.get("outcome_signal", "unresolved"))),
             float(item.get("outcome", {}).get("score", 0.0)),
         )
         for item in evidences
@@ -338,7 +362,7 @@ def has_repeated_success(evidences: list[dict[str, Any]]) -> bool:
         item
         for item in evidences
         if positive_outcome(
-            str(item.get("outcome", {}).get("result", "unresolved")),
+            str(item.get("outcome", {}).get("result", item.get("outcome_signal", "unresolved"))),
             float(item.get("outcome", {}).get("score", 0.0)),
         )
     ]
@@ -412,8 +436,8 @@ class HeuristicSkillDistiller:
         if not (has_learning_improvement(evidences) or has_repeated_success(evidences)):
             return None
 
-        concept_counter = Counter()
-        action_counter = Counter()
+        concept_counter: Counter[str] = Counter()
+        action_counter: Counter[str] = Counter()
         source_episode_ids = []
         for evidence in evidences:
             for name in evidence.get("concept_names", []):
@@ -594,16 +618,16 @@ def coerce_skill_distillation_payload_from_llm(
                 weight = edge["weight"]
             edge["weight"] = max(0.0, min(1.0, weight))
             edge["evidence"] = str(item.get("evidence") or edge.get("evidence", "")).strip()
-            metadata = dict(edge.get("metadata", {}))
+            edge_metadata = dict(edge.get("metadata", {}))
             item_metadata = item.get("metadata", {})
             if isinstance(item_metadata, dict):
                 try:
-                    confidence = float(item_metadata.get("confidence", metadata.get("confidence", 0.0)))
+                    confidence = float(item_metadata.get("confidence", edge_metadata.get("confidence", 0.0)))
                 except (TypeError, ValueError):
-                    confidence = float(metadata.get("confidence", 0.0))
-                metadata["confidence"] = max(0.0, min(1.0, confidence))
-            metadata["role"] = "source_evidence"
-            edge["metadata"] = metadata
+                    confidence = float(edge_metadata.get("confidence", 0.0))
+                edge_metadata["confidence"] = max(0.0, min(1.0, confidence))
+            edge_metadata["role"] = "source_evidence"
+            edge["metadata"] = edge_metadata
             normalized_edges.append(edge)
         return {"skill": skill, "edges": normalized_edges or fallback["edges"]}
     except Exception:

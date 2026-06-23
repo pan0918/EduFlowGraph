@@ -36,6 +36,61 @@ export EDUFLOW_EMBEDDING_MODEL="text-embedding-3-small"
 
 Any OpenAI-compatible chat and embedding endpoint can be used.
 
+## Storage
+
+The default runtime store is one embedded SQLite database:
+
+```text
+data/eduflowgraph.db
+```
+
+It uses:
+
+- JSON payload columns for flexible Concept / Episode / Skill schemas
+- a dedicated Float32 BLOB table for embeddings
+- WAL mode for frontend reads alongside short background writes
+- foreign keys and transactions for graph consistency
+
+No database server, ORM, or vector database is required. The legacy JSON/JSONL
+backend remains available during the migration window:
+
+```bash
+export EDUFLOW_STORAGE_BACKEND=json
+```
+
+### Migrating legacy data
+
+Stop the web stack before applying a migration, then run:
+
+```bash
+.venv/bin/python scripts/migrate_storage.py --data-dir data --dry-run
+.venv/bin/python scripts/migrate_storage.py --data-dir data --apply
+.venv/bin/python scripts/migrate_storage.py --data-dir data --verify
+```
+
+If an initialized but completely unused SQLite database already exists, migration
+still refuses to replace it unless its business tables are verified empty:
+
+```bash
+.venv/bin/python scripts/migrate_storage.py \
+  --data-dir data \
+  --apply \
+  --replace-empty
+```
+
+Migration never edits the legacy JSON/JSONL files. To roll back during the
+observation window, export any new SQLite data first:
+
+```bash
+.venv/bin/python scripts/export_storage.py \
+  --database-path data/eduflowgraph.db \
+  --output-dir data-export-$(date +%Y%m%d-%H%M%S)
+```
+
+After validating the export, stop the app and point the JSON backend at the
+chosen exported directory with `EDUFLOW_STORAGE_BACKEND=json` and
+`EDUFLOW_DATA_DIR=<export-directory>`.
+
 ## Frontend
 
 `web/` is now a small Next.js workspace styled to align with DeepTutor:
@@ -58,6 +113,8 @@ The frontend calls the FastAPI backend through `NEXT_PUBLIC_API_BASE`.
 ## Tests
 
 ```bash
-.venv/bin/python -m unittest tests/test_memory_pipeline.py
+.venv/bin/python -m unittest discover -s tests
+node --test $(rg --files web -g '*.test.mjs')
+(cd web && npm run build)
 .venv/bin/python scripts/smoke_run.py
 ```

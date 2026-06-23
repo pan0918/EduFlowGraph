@@ -1,14 +1,12 @@
 "use client";
 
-import { memo, useEffect, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import {
   BrainCircuit,
   ChevronDown,
   Database,
-  Eraser,
   Gauge,
   Loader2,
-  Plus,
   SendHorizonal,
   Trash2,
 } from "lucide-react";
@@ -122,7 +120,7 @@ const ConversationTracePanel = memo(function ConversationTracePanel({
                 />
                 <TraceList
                   title="Episodes"
-                  items={retrieval?.episodes.map((item) => item.summary.title) ?? []}
+                  items={retrieval?.episodes.map((item) => item.title) ?? []}
                 />
                 <TraceList
                   title="Skills"
@@ -206,8 +204,6 @@ export function ChatWorkspace() {
     lastError,
     sendMessage,
     deleteMessage,
-    resetMemory,
-    startNewSession,
     updateSettings,
   } = useWorkspace();
   const { llmModel, embeddingModel } = useActiveWorkspaceModels();
@@ -216,6 +212,36 @@ export function ChatWorkspace() {
   const currentSession = sessions.find(
     (session) => session.id === settings.sessionId,
   );
+
+  const scrollRef = useRef<HTMLDivElement>(null);
+  // Whether to keep the view pinned to the newest message. Turns off when the
+  // user scrolls up to read history, so we never yank them back down.
+  const autoFollowRef = useRef(true);
+
+  const scrollToBottom = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+  }, []);
+
+  const handleScroll = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    autoFollowRef.current =
+      el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+  }, []);
+
+  // Follow new content (sent message + streaming reply) only while pinned.
+  useEffect(() => {
+    if (!autoFollowRef.current) return;
+    scrollToBottom();
+  }, [messages, scrollToBottom]);
+
+  // Jump to the bottom when switching sessions.
+  useEffect(() => {
+    autoFollowRef.current = true;
+    scrollToBottom();
+  }, [settings.sessionId, scrollToBottom]);
 
   useEffect(() => {
     const handlePointerDown = (event: MouseEvent) => {
@@ -252,12 +278,10 @@ export function ChatWorkspace() {
     const text = draft.trim();
     if (!text || loading || !llmModel || !embeddingModel) return;
     setDraft("");
+    // The user just sent a message: always snap to the newest content.
+    autoFollowRef.current = true;
+    requestAnimationFrame(scrollToBottom);
     await sendMessage(text);
-  };
-
-  const clearAll = async () => {
-    if (!window.confirm("清空当前 DataFlow、Memory Graph 和所有对话记录？")) return;
-    await resetMemory();
   };
 
   const switchLlm = (profileId: string, modelId: string) => {
@@ -292,29 +316,12 @@ export function ChatWorkspace() {
   return (
     <div className="min-h-screen bg-[#fdfaf4] px-5 py-4 lg:px-7">
       <div className="mx-auto flex min-h-[calc(100vh-32px)] w-full max-w-[1160px] flex-col">
-        <div className="flex items-center justify-between border-b border-[var(--border)]/70 pb-3">
-          <button
-            onClick={() => void clearAll()}
-            disabled={loading}
-            className="inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--card)] px-3 text-xs font-medium text-[var(--muted-foreground)] transition hover:bg-[var(--accent)] hover:text-[var(--foreground)] disabled:opacity-60"
-          >
-            <Eraser className="h-4 w-4" />
-            清空记忆
-          </button>
-          <div className="text-2xl font-semibold tracking-tight text-[var(--foreground)]">
-            聊天
-          </div>
-          <button
-            onClick={startNewSession}
-            className="inline-flex h-10 items-center justify-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--card)] px-3 text-xs font-medium text-[var(--foreground)] transition hover:bg-[var(--accent)]"
-          >
-            <Plus className="h-4 w-4" />
-            新对话
-          </button>
-        </div>
-
         <div className="mx-auto flex min-h-0 w-full max-w-[920px] flex-1 flex-col">
-          <div className="flex-1 overflow-y-auto px-2 pb-7 pt-7">
+          <div
+            ref={scrollRef}
+            onScroll={handleScroll}
+            className="flex-1 overflow-y-auto px-2 pb-7 pt-7"
+          >
             {messages.length === 0 ? (
               <div className="flex min-h-full flex-col">
                 <div className="text-center text-sm tracking-[0.12em] text-[var(--muted-foreground)]">

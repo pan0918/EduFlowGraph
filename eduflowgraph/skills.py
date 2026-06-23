@@ -11,8 +11,8 @@ TEACHING_ACTION_TAXONOMY = {
             "放到同一个场景里对比它们。",
         ],
     },
-    "step_by_step_explanation": {
-        "label": "Step-by-step explanation",
+    "step_by_step_guidance": {
+        "label": "Step-by-step guidance",
         "description": "把复杂问题拆成连续小步骤，逐步降低理解门槛。",
         "procedure_steps": [
             "把目标拆成更小的步骤。",
@@ -38,13 +38,13 @@ TEACHING_ACTION_TAXONOMY = {
             "请学习者总结规则。",
         ],
     },
-    "minimal_numeric_example": {
-        "label": "Minimal numeric example",
-        "description": "用可心算的小数字例子让抽象概念变得可见。",
+    "concrete_example": {
+        "label": "Concrete example",
+        "description": "用具体例子、数字实例或类比让抽象概念落地。",
         "procedure_steps": [
-            "设置一个数量很小的场景。",
-            "列出相关数量。",
-            "把数字映射回公式。",
+            "设置一个具体的场景或数字实例。",
+            "列出相关数量关系。",
+            "把具体例子映射回抽象概念。",
         ],
     },
     "formula_decomposition": {
@@ -56,8 +56,8 @@ TEACHING_ACTION_TAXONOMY = {
             "再把各项连回完整表达式。",
         ],
     },
-    "student_self_explanation": {
-        "label": "Student self explanation",
+    "self_explanation_prompt": {
+        "label": "Self explanation prompt",
         "description": "要求学生用自己的话复述关键关系与结论。",
         "procedure_steps": [
             "请学习者用自己的话复述。",
@@ -74,13 +74,31 @@ TEACHING_ACTION_TAXONOMY = {
             "判断是否还需要继续支架。",
         ],
     },
+    "guided_practice": {
+        "label": "Guided practice",
+        "description": "让学习者在导师支持下完成练习或相似任务。",
+        "procedure_steps": [
+            "给出一个相似任务。",
+            "在学习者尝试时提供提示。",
+            "逐步减少支架直到独立完成。",
+        ],
+    },
+    "error_correction": {
+        "label": "Error correction",
+        "description": "指出并纠正学习者的具体错误推理、步骤或应用。",
+        "procedure_steps": [
+            "精确指出错误位置和内容。",
+            "解释为什么是错的。",
+            "引导学习者自己修正。",
+        ],
+    },
 }
 
 DIFFICULTY_PATTERN_TAXONOMY = {
     "direction_confusion": {
         "label": "Direction confusion",
         "description": "学生混淆两个方向相关但不对称的概念、条件或公式。",
-        "trigger_phrase": "有方向性的概念、条件或公式",
+        "trigger_phrase": "方向、条件、因果等不对称关系的混淆",
     },
     "abstraction_gap": {
         "label": "Abstraction gap",
@@ -102,6 +120,11 @@ DIFFICULTY_PATTERN_TAXONOMY = {
         "description": "学生在原例子中能跟上，但换一个相似场景就不会迁移。",
         "trigger_phrase": "难以迁移到相似情境的问题",
     },
+    "conceptual_confusion": {
+        "label": "Conceptual confusion",
+        "description": "学生对概念本身、定义、边界或核心含义存在一般性混淆。",
+        "trigger_phrase": "概念本身的理解混淆",
+    },
     "unknown": {
         "label": "Unknown",
         "description": "当前证据不足以稳定判断困难模式。",
@@ -111,13 +134,15 @@ DIFFICULTY_PATTERN_TAXONOMY = {
 
 ACTION_TO_SUCCESS_CRITERIA = {
     "contrastive_explanation": "学习者能清楚说出两个目标的差异。",
-    "step_by_step_explanation": "学习者能按顺序解释关键步骤。",
+    "step_by_step_guidance": "学习者能按顺序解释关键步骤。",
     "worked_example": "学习者能把例题模式迁移到相似情境。",
     "socratic_questioning": "学习者能先于导师自己说出规则。",
-    "minimal_numeric_example": "学习者能把数字例子映射回抽象概念。",
+    "concrete_example": "学习者能把具体例子映射回抽象概念。",
     "formula_decomposition": "学习者能解释每个公式项为什么出现。",
-    "student_self_explanation": "学习者能用自己的话复述核心思想。",
+    "self_explanation_prompt": "学习者能用自己的话复述核心思想。",
     "diagnostic_check": "学习者能正确回答一个短检查题。",
+    "guided_practice": "学习者能在减少支架后独立完成相似任务。",
+    "error_correction": "学习者能指出并修正自己先前的错误。",
 }
 
 

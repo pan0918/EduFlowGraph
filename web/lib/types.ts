@@ -1,18 +1,3 @@
-export interface EventRecord {
-  event_id: string;
-  stream_index?: number;
-  session_id: string;
-  turn_index: number;
-  timestamp: string;
-  segment_id?: string | null;
-  actor: string;
-  event_type: string;
-  content: string;
-  metadata?: Record<string, unknown>;
-  causation_id?: string | null;
-  correlation_id?: string | null;
-}
-
 export interface ConceptNode {
   concept_id: string;
   node_id: string;
@@ -32,39 +17,29 @@ export interface EpisodeNode {
   node_id: string;
   node_type: "episode";
   episode_type: string;
+  title: string;
+  summary: string;
+  memory_value: string;
   provenance: {
-    segment_id: string;
     session_id: string;
-    source_event_ids: string[];
+    turn_range: [number, number];
     start_time: string;
     end_time: string;
   };
-  summary: {
-    title: string;
-    topic_summary: string;
-    short_summary: string;
+  learner: {
+    goal: string;
+    obstacle: string;
+    initial_state: string;
+    evidence: string[];
   };
-  learner_problem: {
-    student_question: string;
-    detected_problem: string;
-    misconceptions: string[];
-    understanding_before: string;
-    difficulty_signals: string[];
+  tutor: {
+    strategy: string;
+    key_moves: string[];
   };
-  tutor_action?: {
-    main_strategy?: string;
-    strategy_summary?: string;
-    teaching_steps?: string[];
-    used_examples?: boolean;
-    used_assessment?: boolean;
-  };
-  learning_outcome?: {
-    result?: string;
-    understanding_after?: string;
-    score?: number;
-    evidence?: string;
-    needs_follow_up?: boolean;
-    follow_up_suggestion?: string;
+  outcome: {
+    status: string;
+    evidence: string;
+    next_step: string;
   };
   retrieval?: {
     keywords: string[];
@@ -74,8 +49,6 @@ export interface EpisodeNode {
   };
   extraction_metadata?: {
     extractor_version?: string;
-    boundary_reason?: string;
-    boundary_confidence?: number;
     extraction_confidence?: number;
     created_at?: string;
   };
@@ -107,6 +80,35 @@ export interface SkillNode {
     extractor_version?: string;
     source_episode_ids?: string[];
     evidence_concept_scope?: string[];
+  };
+}
+
+export type ProfileModelName = "learner_model" | "strategy_model" | "context_model";
+
+export interface ProfileModelEntry {
+  summary: string;
+  updated_at?: string | null;
+  revisions: number;
+}
+
+export interface ProfileChange {
+  at?: string | null;
+  model: ProfileModelName;
+  note: string;
+}
+
+export interface LearnerProfileSnapshot {
+  models: {
+    learner_model: ProfileModelEntry;
+    strategy_model: ProfileModelEntry;
+    context_model: ProfileModelEntry;
+  };
+  recent_changes: ProfileChange[];
+  updated_at?: string | null;
+  revision_count: number;
+  health: {
+    status: string;
+    message?: string;
   };
 }
 
@@ -143,44 +145,43 @@ export interface GraphEdge {
 }
 
 export interface DashboardSnapshot {
-  events: EventRecord[];
   concepts: ConceptNode[];
   episodes: EpisodeNode[];
   skills: SkillNode[];
   edges: GraphEdge[];
-  boundary_segments?: BoundarySegment[];
+  profile: LearnerProfileSnapshot;
+  memory_flow_count: number;
   retrieval_health?: {
     total_nodes: number;
     valid_vectors: number;
     stale_vectors: number;
   };
-}
-
-export interface BoundaryDecision {
-  should_end: boolean;
-  should_wait: boolean;
-  force_end: boolean;
-  confidence: number;
-  reason: string;
-  completion_status: string;
-  topic_summary: string;
-}
-
-export interface BoundarySegment {
-  session_id: string;
-  decision: BoundaryDecision;
-  events: EventRecord[];
+  storage_health?: {
+    backend: "sqlite" | "json" | string;
+    status?: "ok" | "error" | string;
+    message?: string;
+    schema_version?: number;
+    journal_mode?: string;
+    database_size_bytes?: number;
+    wal_size_bytes?: number;
+    integrity?: string;
+  };
 }
 
 export interface RetrievedContext {
   concepts: ConceptNode[];
   episodes: EpisodeNode[];
   skills: SkillNode[];
+  profile?: LearnerProfileSnapshot;
+  profile_context?: string;
   retrieval_summary?: {
     stale_vectors?: number;
     concept_hits?: number;
     episode_hits?: number;
     skill_hits?: number;
+    profile_hits?: number;
+    profile_anchor_hits?: number;
+    profile_fusion?: Record<string, unknown>;
     embedding_error?: string | null;
     query_info?: Record<string, unknown>;
     top_matches?: {

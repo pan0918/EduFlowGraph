@@ -7,8 +7,8 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from eduflowgraph.config import load_settings_from_mapping
-from eduflowgraph.pipeline import TutorPipeline
+from EduFlowGraph.config import load_settings_from_mapping
+from EduFlowGraph.pipeline import TutorPipeline
 
 
 def main() -> None:
@@ -29,7 +29,13 @@ def main() -> None:
         print("THIRD_EPISODE=", third["episode"]["node_id"] if third.get("episode") else "none")
         print("FOURTH_EPISODE=", fourth["episode"]["node_id"] if fourth.get("episode") else "none")
         print("FIFTH_EPISODE=", fifth["episode"]["node_id"] if fifth.get("episode") else "none")
-        print("COUNTS=", {key: len(snapshot[key]) for key in ["events", "concepts", "episodes", "skills", "edges"]})
+        print(
+            "COUNTS=",
+            {
+                key: len(snapshot[key])
+                for key in ["memory_events", "concepts", "episodes", "skills", "edges"]
+            },
+        )
 
 
 if __name__ == "__main__":

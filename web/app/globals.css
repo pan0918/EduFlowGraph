@@ -5,7 +5,7 @@
 @layer base {
   :root {
     color-scheme: light;
-    --font-sans: "Avenir Next", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    --font-sans: "Inter", "Avenir Next", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
     --font-serif: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
     --background: #faf7f1;
     --foreground: #1f1d1b;
@@ -22,6 +22,9 @@
     --border: #ddd3c5;
     --input: #ddd3c5;
     --ring: #b0501e;
+    --success: #3b7d4f;
+    --warning: #c4790a;
+    --info: #3574a5;
   }
 
   * {
@@ -39,6 +42,7 @@
     @apply font-sans antialiased;
     background: var(--background);
     color: var(--foreground);
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
   }
 
   button,
@@ -50,8 +54,35 @@
 }
 
 @layer components {
+  /* Centered, max-width content container shared across workspace pages so
+     content stays comfortably readable instead of stretching edge-to-edge on
+     large monitors (DeepTutor-style centered layout). */
+  .page-shell {
+    @apply mx-auto w-full max-w-[1160px] px-6 py-8 lg:px-10 lg:py-10;
+  }
+
   .surface-card {
     @apply rounded-[28px] border bg-[var(--card)] shadow-surface;
+  }
+
+  .surface-card-sm {
+    @apply rounded-2xl border bg-[var(--card)] shadow-[0_8px_24px_rgba(54,45,36,0.06)];
+  }
+
+  .dimension-card {
+    @apply rounded-3xl border bg-[var(--card)] p-5 shadow-[0_10px_32px_rgba(54,45,36,0.06)] transition-shadow hover:shadow-[0_14px_42px_rgba(54,45,36,0.10)];
+  }
+
+  .progress-bar {
+    @apply h-1.5 rounded-full bg-[var(--secondary)];
+  }
+
+  .progress-bar-fill {
+    @apply h-full rounded-full transition-all duration-500 ease-out;
+  }
+
+  .chip {
+    @apply inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium;
   }
 
   .assistant-markdown .katex-display {

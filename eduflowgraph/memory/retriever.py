@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Any, Callable
 
-from .skill_extractor import skill_evidence_concept_scope
+from ..memory.skill_pipeline import skill_evidence_concept_scope
 
 
 class MemoryRetriever:
@@ -527,7 +527,7 @@ class MemoryRetriever:
         return min(1.0, matches / 3.0)
 
     def _episode_outcome_relevance(self, query_info: dict[str, Any], episode: dict[str, Any]) -> float:
-        result = str(episode.get("learning_outcome", {}).get("result", "unresolved"))
+        result = str(episode.get("outcome", {}).get("status", "unresolved"))
         if query_info.get("learner_signal") == "still_confused":
             if result in {"failed", "unresolved"}:
                 return 1.0
@@ -547,31 +547,37 @@ class MemoryRetriever:
 
     def _episode_intent_bonus(self, query_info: dict[str, Any], episode: dict[str, Any]) -> float:
         intent = str(query_info.get("intent", "concept_explanation"))
-        tutor_action = episode.get("tutor_action", {})
-        summary = episode.get("summary", {})
-        learner_problem = episode.get("learner_problem", {})
-        if intent == "assessment" and tutor_action.get("used_assessment"):
-            return 0.12
+        tutor = episode.get("tutor", {})
+        key_moves = [str(m).lower() for m in tutor.get("key_moves", [])]
+        title = str(episode.get("title", ""))
+        summary = str(episode.get("summary", ""))
+        obstacle = str(episode.get("learner", {}).get("obstacle", ""))
+        if intent == "assessment":
+            if any(kw in move for move in key_moves for kw in ["assessment", "check", "diagnos", "test", "quiz", "检查", "测试"]):
+                return 0.12
         if intent == "comparison":
-            text = " ".join(
-                [
-                    str(summary.get("topic_summary", "")),
-                    str(summary.get("short_summary", "")),
-                    str(learner_problem.get("detected_problem", "")),
-                ]
-            ).lower()
+            text = " ".join([title, summary, obstacle]).lower()
             if any(token in text for token in ["对比", "区别", "差异", "p(a|b)", "p(b|a)"]):
                 return 0.12
-        if intent in {"worked_example", "formula_grounding"} and tutor_action.get("used_examples"):
-            return 0.12
+        if intent in {"worked_example", "formula_grounding"}:
+            if any(kw in move for move in key_moves for kw in ["example", "worked", "numeric", "例子", "举例", "例题"]):
+                return 0.12
         return 0.0
 
     def render_context(self, context: dict[str, Any]) -> str:
+        from ..profile.retriever import render_profile_context
+
         concepts = context.get("concepts", [])
         episodes = context.get("episodes", [])
         skills = context.get("skills", [])
         query_info = context.get("retrieval_summary", {}).get("query_info", {})
         lines = ["[Memory Context]", ""]
+        profile_block = context.get("profile_context")
+        if not profile_block and isinstance(context.get("profile"), dict):
+            profile_block = render_profile_context(context["profile"])
+        if profile_block:
+            lines.append(profile_block)
+            lines.append("")
         lines.append("Current related concepts:")
         if concepts:
             for concept in concepts[:3]:
@@ -591,9 +597,11 @@ class MemoryRetriever:
         lines.append("Relevant past episodes:")
         if episodes:
             for episode in episodes[:3]:
-                summary = episode.get("summary", {})
+                episode_summary = str(episode.get("summary", ""))
+                episode_title = str(episode.get("title", ""))
+                display = episode_summary or episode_title or ""
                 lines.append(
-                    f"- {episode.get('node_id', 'episode')}: {summary.get('short_summary', summary.get('topic_summary', ''))}"
+                    f"- {episode.get('node_id', 'episode')}: {display}"
                 )
         else:
             lines.append("- None")
@@ -620,16 +628,16 @@ class MemoryRetriever:
         ranked = sorted(
             episodes[:3],
             key=lambda episode: self._outcome_rank(
-                str(episode.get("learning_outcome", {}).get("result", "unresolved"))
+                str(episode.get("outcome", {}).get("status", "unresolved"))
             ),
         )
         earliest = ranked[0]
         latest = ranked[-1]
         earliest_problem = str(
-            earliest.get("learner_problem", {}).get("detected_problem", "")
+            earliest.get("learner", {}).get("obstacle", "")
         ).strip()
         latest_evidence = str(
-            latest.get("learning_outcome", {}).get("evidence", "")
+            latest.get("outcome", {}).get("evidence", "")
         ).strip()
         latest_evidence = self._normalize_history_evidence(latest_evidence)
         lines: list[str] = []
@@ -640,7 +648,7 @@ class MemoryRetriever:
 
         misconceptions = []
         for episode in episodes[:3]:
-            for item in episode.get("learner_problem", {}).get("misconceptions", []):
+            for item in episode.get("learner", {}).get("evidence", []):
                 text = str(item).strip()
                 if text and text not in misconceptions:
                     misconceptions.append(text)
@@ -649,8 +657,8 @@ class MemoryRetriever:
 
         if not lines:
             for episode in episodes[:3]:
-                problem = episode.get("learner_problem", {})
-                detected = str(problem.get("detected_problem", "")).strip()
+                learner = episode.get("learner", {})
+                detected = str(learner.get("obstacle", "")).strip()
                 if detected and detected not in lines:
                     lines.append(detected)
         return lines[:3]
@@ -681,7 +689,7 @@ class MemoryRetriever:
                     f"use {first_steps}, say what each side means in the same scenario, and ask the learner to compare them back in one sentence."
                 )
             if intent in {"worked_example", "formula_grounding"}:
-                if "minimal_numeric_example" in actions:
+                if "concrete_example" in actions:
                     return (
                         f"Start from {concept_names or 'the current concept focus'}, begin with a small worked example before definitions or formulas, "
                         f"use {first_steps}, map each symbol back to the example, and only then summarize the rule."
@@ -691,7 +699,7 @@ class MemoryRetriever:
                     f"use {first_steps}, and connect each step back to the formula meaning before abstracting."
                 )
             if learner_signal == "still_confused" and intent == "re_explanation":
-                if "minimal_numeric_example" in actions:
+                if "concrete_example" in actions:
                     return (
                         f"Start from {concept_names or 'the current concept focus'}, switch to a different explanation path than before, "
                         f"use {first_steps}, then use a small numeric example and ask the learner to restate the difference in their own words."
@@ -702,7 +710,7 @@ class MemoryRetriever:
                 )
             example_hint = (
                 " Use a small numeric example before checking understanding."
-                if "minimal_numeric_example" in actions
+                if "concrete_example" in actions
                 else " Ask the learner to restate the difference after the explanation."
             )
             return (
@@ -748,7 +756,7 @@ class MemoryRetriever:
         ):
             return 0.12
         if intent in {"worked_example", "formula_grounding"} and (
-            "minimal_numeric_example" in actions or "step_by_step_explanation" in actions
+            "concrete_example" in actions or "step_by_step_guidance" in actions
         ):
             return 0.12
         if intent == "re_explanation" and "contrastive_explanation" in actions:
@@ -844,14 +852,9 @@ class MemoryRetriever:
                     *[str(item) for item in node.get("procedure", [])],
                 ]
             ).strip()
-        summary = node.get("summary", {})
-        return " ".join(
-            [
-                str(summary.get("title", "")),
-                str(summary.get("topic_summary", "")),
-                str(summary.get("short_summary", "")),
-            ]
-        ).strip()
+        title = str(node.get("title", ""))
+        summary = str(node.get("summary", ""))
+        return " ".join([title, summary]).strip()
 
     def _keyword_score(self, query: str, texts: list[str]) -> float:
         query_lower = query.lower()
@@ -874,15 +877,15 @@ class MemoryRetriever:
 
     def _episode_keyword_score(self, query: str, episode: dict[str, Any]) -> float:
         retrieval = episode.get("retrieval", {})
-        summary = episode.get("summary", {})
-        learner_problem = episode.get("learner_problem", {})
+        title = str(episode.get("title", ""))
+        summary = str(episode.get("summary", ""))
+        obstacle = str(episode.get("learner", {}).get("obstacle", ""))
         return self._keyword_score(
             query,
             [
-                str(summary.get("title", "")),
-                str(summary.get("topic_summary", "")),
-                str(summary.get("short_summary", "")),
-                str(learner_problem.get("detected_problem", "")),
+                title,
+                summary,
+                obstacle,
                 str(retrieval.get("embedding_text", "")),
                 *[str(item) for item in retrieval.get("keywords", [])],
             ],

@@ -7,13 +7,15 @@ import {
   useMemo,
   useRef,
   useState,
+  useCallback,
   type ReactNode,
 } from "react";
 import {
   composeMessages,
-  snapshotToSessions,
+  turnsToMessages,
   type ChatMessage,
   type ChatSessionSummary,
+  type TurnRecord,
 } from "@/components/providers/workspace-session-utils";
 import type {
   DashboardSnapshot,
@@ -71,12 +73,22 @@ interface WorkspaceContextValue {
 }
 
 const EMPTY_SNAPSHOT: DashboardSnapshot = {
-  events: [],
   concepts: [],
   episodes: [],
   skills: [],
   edges: [],
-  boundary_segments: [],
+  profile: {
+    models: {
+      learner_model: { summary: "", updated_at: null, revisions: 0 },
+      strategy_model: { summary: "", updated_at: null, revisions: 0 },
+      context_model: { summary: "", updated_at: null, revisions: 0 },
+    },
+    recent_changes: [],
+    updated_at: null,
+    revision_count: 0,
+    health: { status: "ok", message: "" },
+  },
+  memory_flow_count: 0,
 };
 
 const EMPTY_DIAGNOSTICS: DiagnosticsState = {
@@ -114,7 +126,9 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const [diagnostics, setDiagnostics] = useState<DiagnosticsState>(EMPTY_DIAGNOSTICS);
   const [lastError, setLastError] = useState<string | null>(null);
   const [pendingMessages, setPendingMessages] = useState<ChatMessage[]>([]);
-  const sendingRef = useRef(false);
+  const [sessions, setSessions] = useState<ChatSessionSummary[]>([]);
+  const [sessionTurns, setSessionTurns] = useState<TurnRecord[]>([]);
+  const sendSeqRef = useRef(0);
 
   useEffect(() => {
     const raw = window.localStorage.getItem(STORAGE_KEY);
@@ -144,13 +158,69 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     }
   }, [settings]);
 
-  const refreshDashboard = async () => {
+  const refreshSessions = useCallback(async () => {
+    try {
+      const response = await fetch(`${apiBase()}/api/sessions`, {
+        cache: "no-store",
+      });
+      if (!response.ok) return;
+      const data = await response.json();
+      const serverSessions: ChatSessionSummary[] = (data.sessions || []).map(
+        (s: { id: string; title: string; message_count: number; last_updated: string }) => ({
+          id: s.id,
+          title: s.title || "未命名对话",
+          lastUpdated: s.last_updated || "",
+          messageCount: s.message_count || 0,
+        }),
+      );
+      const hasCurrentSession = serverSessions.some(
+        (s) => s.id === settings.sessionId,
+      );
+      if (!hasCurrentSession) {
+        serverSessions.unshift({
+          id: settings.sessionId,
+          title: "新对话",
+          lastUpdated: "",
+          messageCount: 0,
+        });
+      }
+      setSessions(serverSessions);
+    } catch {
+      setSessions([
+        {
+          id: settings.sessionId,
+          title: "新对话",
+          lastUpdated: "",
+          messageCount: 0,
+        },
+      ]);
+    }
+  }, [settings.sessionId]);
+
+  const refreshSessionTurns = useCallback(async () => {
+    try {
+      const response = await fetch(
+        `${apiBase()}/api/sessions/${encodeURIComponent(settings.sessionId)}/turns`,
+        { cache: "no-store" },
+      );
+      if (!response.ok) {
+        setSessionTurns([]);
+        return;
+      }
+      const data = await response.json();
+      setSessionTurns(data.turns || []);
+    } catch {
+      setSessionTurns([]);
+    }
+  }, [settings.sessionId]);
+
+  const refreshDashboard = useCallback(async () => {
     const response = await fetch(`${apiBase()}/api/dashboard`, {
       cache: "no-store",
     });
     const data = await readJsonOrThrow<DashboardSnapshot>(response);
     setSnapshot(data);
-  };
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -162,21 +232,19 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         if (active) {
           setBackendHealthy(health.ok);
         }
-        await refreshDashboard();
       } catch {
-        if (active) {
-          setBackendHealthy(false);
-          setSnapshot(EMPTY_SNAPSHOT);
-          setContext(null);
-        }
+        if (active) setBackendHealthy(false);
       }
+      await Promise.allSettled([
+        refreshDashboard().catch(() => {}),
+        refreshSessions(),
+        refreshSessionTurns(),
+      ]);
     }
     void boot();
     const timer = window.setInterval(() => {
       void refreshDashboard().catch(() => {
         setBackendHealthy(false);
-        setSnapshot(EMPTY_SNAPSHOT);
-        setContext(null);
       });
     }, 30000);
     return () => {
@@ -185,9 +253,25 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
+  useEffect(() => {
+    void refreshSessionTurns();
+    void refreshSessions();
+  }, [settings.sessionId, refreshSessionTurns, refreshSessions]);
+
+  const persistedMessages = useMemo(
+    () => turnsToMessages(sessionTurns),
+    [sessionTurns],
+  );
+
   const sendMessage = async (message: string) => {
-    if (sendingRef.current) return;
-    sendingRef.current = true;
+    // Each send gets a monotonically increasing generation id. Only the most
+    // recent send is allowed to mutate shared `loading`/pending state, so a
+    // follow-up message (sent as soon as the previous answer settled) never has
+    // its optimistic bubbles clobbered by the previous stream's tail work.
+    const myGen = ++sendSeqRef.current;
+    const clientRequestId = `request_${myGen}`;
+    const isCurrent = () => sendSeqRef.current === myGen;
+    let answerSettled = false;
     setLoading(true);
     setLastError(null);
     try {
@@ -196,8 +280,14 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         throw new Error(runtimeMemo.error || "运行时配置不可用。");
       }
       setPendingMessages([
-        { role: "student", content: message, pending: true },
-        { role: "assistant", content: "", streaming: true, pending: true },
+        { role: "student", content: message, pending: true, clientRequestId },
+        {
+          role: "assistant",
+          content: "",
+          streaming: true,
+          pending: true,
+          clientRequestId,
+        },
       ]);
       const response = await fetch(`${apiBase()}/api/chat/stream`, {
         method: "POST",
@@ -221,6 +311,35 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       let buffer = "";
       let finalReceived = false;
 
+      // Settle the answer: pull the now-persisted turn into the message list,
+      // drop the optimistic bubbles, and release the composer. Runs once, as
+      // soon as the answer text is complete — before slower memory processing.
+      const settleAnswer = async (
+        context?: RetrievedContext,
+        usage?: Record<string, unknown>,
+      ) => {
+        if (answerSettled) return;
+        answerSettled = true;
+        setPendingMessages((current) =>
+          current.map((item, index) =>
+            index === 1
+              ? {
+                  ...item,
+                  retrieval: context || item.retrieval,
+                  usage: usage || item.usage,
+                  streaming: false,
+                  pending: false,
+                }
+              : item,
+          ),
+        );
+        await Promise.allSettled([refreshSessionTurns(), refreshSessions()]);
+        if (isCurrent()) {
+          setPendingMessages([]);
+          setLoading(false);
+        }
+      };
+
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -237,22 +356,15 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
             delta?: string;
             context?: RetrievedContext;
             snapshot?: DashboardSnapshot;
-            user_event?: { event_id?: string };
-            assistant_event?: { event_id?: string };
             usage?: Record<string, unknown>;
+            stage?: string;
           };
           if (event.type === "context" && event.context) {
             setContext(event.context);
             setPendingMessages((current) =>
-              current.map((item, index) => {
-                if (index === 0 && event.user_event?.event_id) {
-                  return { ...item, eventId: event.user_event.event_id };
-                }
-                if (index === 1) {
-                  return { ...item, retrieval: event.context };
-                }
-                return item;
-              }),
+              current.map((item, index) =>
+                index === 1 ? { ...item, retrieval: event.context } : item,
+              ),
             );
             continue;
           }
@@ -286,61 +398,47 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
             );
             continue;
           }
+          if (event.type === "answer") {
+            if (event.context) setContext(event.context);
+            await settleAnswer(event.context, event.usage);
+            continue;
+          }
+          if (event.type === "memory" && event.snapshot) {
+            setSnapshot(event.snapshot);
+            continue;
+          }
           if (event.type === "final") {
             finalReceived = true;
             if (event.context) setContext(event.context);
-            if (event.assistant_event?.event_id || event.usage) {
-              setPendingMessages((current) =>
-                current.map((item, index) =>
-                  index === 1
-                    ? {
-                        ...item,
-                        eventId: event.assistant_event?.event_id || item.eventId,
-                        retrieval: event.context || item.retrieval,
-                        usage: event.usage || item.usage,
-                        streaming: false,
-                      }
-                    : item,
-                ),
-              );
-            }
             if (event.snapshot) setSnapshot(event.snapshot);
+            void refreshDashboard().catch(() => {});
+            // Fallback: if the backend didn't emit a separate "answer" event,
+            // settle here so the composer is still released.
+            await settleAnswer(event.context, event.usage);
           }
         }
       }
 
-      if (!finalReceived) {
+      if (!finalReceived && !answerSettled) {
         throw new Error("流式响应未返回最终状态。");
       }
-      setPendingMessages([]);
     } catch (error) {
       const messageText =
         error instanceof Error ? error.message : "导师请求失败。";
-      setLastError(messageText);
-      setPendingMessages([]);
+      if (isCurrent()) {
+        setLastError(messageText);
+        setPendingMessages([]);
+      }
       throw error;
     } finally {
-      setLoading(false);
-      sendingRef.current = false;
+      if (isCurrent()) {
+        setLoading(false);
+      }
     }
   };
 
-  const deleteMessage = async (eventId: string) => {
-    setLastError(null);
-    try {
-      const response = await fetch(`${apiBase()}/api/events/${encodeURIComponent(eventId)}`, {
-        method: "DELETE",
-        cache: "no-store",
-      });
-      const data = await readJsonOrThrow<{ snapshot: DashboardSnapshot }>(response);
-      setSnapshot(data.snapshot);
-      setContext(null);
-    } catch (error) {
-      const messageText =
-        error instanceof Error ? error.message : "删除消息失败。";
-      setLastError(messageText);
-      throw error;
-    }
+  const deleteMessage = async (_eventId: string) => {
+    setLastError("消息删除功能正在开发中。");
   };
 
   const resetMemory = async () => {
@@ -361,6 +459,8 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       setSnapshot(data.snapshot);
       setContext(null);
       setPendingMessages([]);
+      setSessionTurns([]);
+      await refreshSessions();
     } catch (error) {
       const messageText =
         error instanceof Error ? error.message : "清空记忆失败。";
@@ -519,8 +619,8 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     () => ({
       settings,
       snapshot,
-      messages: composeMessages(snapshot, settings.sessionId, pendingMessages),
-      sessions: snapshotToSessions(snapshot, settings.sessionId),
+      messages: composeMessages(persistedMessages, pendingMessages),
+      sessions,
       context,
       loading,
       backendHealthy,
@@ -543,7 +643,9 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     [
       settings,
       snapshot,
+      persistedMessages,
       pendingMessages,
+      sessions,
       context,
       loading,
       backendHealthy,

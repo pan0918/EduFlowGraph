@@ -1,5 +1,17 @@
-import type { RetrievedContext } from "@/lib/types";
+import type { ProfileModelName, RetrievedContext } from "@/lib/types";
 import { formatSkillDisplay } from "@/lib/skill-display";
+
+const MODEL_LABELS: Record<ProfileModelName, string> = {
+  learner_model: "长期学习者画像",
+  strategy_model: "下一步教学策略",
+  context_model: "当前学习情境",
+};
+
+const MODEL_ORDER: ProfileModelName[] = [
+  "learner_model",
+  "strategy_model",
+  "context_model",
+];
 
 export function ContextRail({ context }: { context: RetrievedContext | null }) {
   return (
@@ -13,6 +25,33 @@ export function ContextRail({ context }: { context: RetrievedContext | null }) {
       {!context ? (
         <div className="surface-card p-4 text-sm text-[var(--muted-foreground)]">
           先和导师聊一句，这里就会出现对应的记忆检索结果。
+        </div>
+      ) : null}
+      {context?.profile?.models &&
+      MODEL_ORDER.some((m) => context.profile?.models[m]?.summary?.trim()) ? (
+        <div className="surface-card p-4">
+          <div className="text-xs uppercase tracking-[0.18em] text-[var(--muted-foreground)]">
+            注入的学习者画像
+          </div>
+          <div className="mt-3 space-y-3">
+            {MODEL_ORDER.map((m) => {
+              const summary = context.profile?.models[m]?.summary?.trim();
+              if (!summary) return null;
+              return (
+                <div
+                  key={m}
+                  className="rounded-2xl border border-[var(--border)] bg-[var(--secondary)]/50 p-3"
+                >
+                  <div className="text-xs font-medium text-[var(--muted-foreground)]">
+                    {MODEL_LABELS[m]}
+                  </div>
+                  <div className="mt-1 text-sm leading-6 text-[var(--foreground)]">
+                    {summary}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         </div>
       ) : null}
       {context?.concepts.map((concept) => (
@@ -36,12 +75,12 @@ export function ContextRail({ context }: { context: RetrievedContext | null }) {
           <div className="mt-3 space-y-3">
             {context.episodes.map((episode) => (
               <div key={episode.node_id} className="rounded-2xl border border-[var(--border)] bg-[var(--secondary)]/50 p-3">
-                <div className="font-medium">{episode.summary.title}</div>
+                <div className="font-medium">{episode.title}</div>
                 <div className="mt-1 text-xs text-[var(--muted-foreground)]">
                   {episode.episode_type} | {episode.node_id}
                 </div>
                 <div className="mt-2 text-sm leading-6 text-[var(--foreground)]">
-                  {episode.summary.short_summary}
+                  {episode.summary}
                 </div>
               </div>
             ))}

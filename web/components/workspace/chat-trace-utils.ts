@@ -18,12 +18,14 @@ export interface RetrievalTraceSummary {
   conceptCount: number;
   episodeCount: number;
   skillCount: number;
+  profileCount: number;
   totalCount: number;
   hasContext: boolean;
   staleVectors: number;
   conceptHits: number;
   episodeHits: number;
   skillHits: number;
+  profileHits: number;
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -88,18 +90,26 @@ export function summarizeRetrieval(
   const conceptCount = retrieval.concepts.length;
   const episodeCount = retrieval.episodes.length;
   const skillCount = retrieval.skills.length;
+  const profileModels = retrieval.profile?.models;
+  const profileCount = profileModels
+    ? (["learner_model", "strategy_model", "context_model"] as const).filter(
+        (m) => profileModels[m]?.summary?.trim(),
+      ).length
+    : 0;
   const retrievalSummary = retrieval.retrieval_summary;
 
   return {
     conceptCount,
     episodeCount,
     skillCount,
-    totalCount: conceptCount + episodeCount + skillCount,
+    profileCount,
+    totalCount: conceptCount + episodeCount + skillCount + profileCount,
     hasContext: true,
     staleVectors: asNumber(retrievalSummary?.stale_vectors),
     conceptHits: asNumber(retrievalSummary?.concept_hits),
     episodeHits: asNumber(retrievalSummary?.episode_hits),
     skillHits: asNumber(retrievalSummary?.skill_hits),
+    profileHits: asNumber(retrievalSummary?.profile_hits),
   };
 }
 

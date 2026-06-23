@@ -2,8 +2,8 @@ import json
 import unittest
 from unittest.mock import patch
 
-from eduflowgraph.llm import LLMClient
-from eduflowgraph.prompts import (
+from EduFlowGraph.llm import LLMClient
+from EduFlowGraph.prompts import (
     TUTOR_MEMORY_AUGMENTED_USER_PROMPT,
     TUTOR_SYSTEM_PROMPT,
     TUTOR_USER_PROMPT,
@@ -73,7 +73,7 @@ class ModelRuntimeTest(unittest.TestCase):
             embedding_model="embed-test",
         )
 
-        with patch("eduflowgraph.llm.request.urlopen", side_effect=fake_urlopen):
+        with patch("EduFlowGraph.llm.request.urlopen", side_effect=fake_urlopen):
             result = client.chat([{"role": "user", "content": "请只回复 OK"}], temperature=0)
 
         self.assertEqual("https://api.siliconflow.cn/v1/chat/completions", captured["url"])
@@ -97,7 +97,7 @@ class ModelRuntimeTest(unittest.TestCase):
             embedding_model="embed-test",
         )
 
-        with patch("eduflowgraph.llm.request.urlopen", side_effect=fake_urlopen):
+        with patch("EduFlowGraph.llm.request.urlopen", side_effect=fake_urlopen):
             chunks = list(client.stream_chat([{"role": "user", "content": "你好"}], temperature=0.3))
 
         self.assertEqual("https://api.deepseek.com/chat/completions", captured["url"])
@@ -135,7 +135,7 @@ class ModelRuntimeTest(unittest.TestCase):
             embedding_send_dimensions=True,
         )
 
-        with patch("eduflowgraph.llm.request.urlopen", side_effect=fake_urlopen):
+        with patch("EduFlowGraph.llm.request.urlopen", side_effect=fake_urlopen):
             vector = client.embedding("hello")
 
         self.assertEqual("https://api.siliconflow.cn/v1/embeddings", captured["url"])
@@ -173,7 +173,7 @@ class ModelRuntimeTest(unittest.TestCase):
         self.assertIn('"ordered_ids": [string]', captured["prompt"])
 
     def test_messages_for_prompt_supports_system_and_user_split(self):
-        from eduflowgraph.llm import messages_for_prompt
+        from EduFlowGraph.llm import messages_for_prompt
 
         messages = messages_for_prompt("dynamic user content", system_prompt="static system prompt")
 
@@ -186,8 +186,8 @@ class ModelRuntimeTest(unittest.TestCase):
         )
 
     def test_tutor_prompts_are_split_for_cache_friendliness(self):
-        self.assertIn("通用 AI 助手", TUTOR_SYSTEM_PROMPT)
-        self.assertIn("直接回答用户的问题", TUTOR_SYSTEM_PROMPT)
+        self.assertIn("专业的 AI 学习导师", TUTOR_SYSTEM_PROMPT)
+        self.assertIn("个性化教学支持", TUTOR_SYSTEM_PROMPT)
         self.assertNotIn("Teaching instruction", TUTOR_SYSTEM_PROMPT)
         self.assertNotIn("小检查", TUTOR_SYSTEM_PROMPT)
         self.assertIn("{user_query}", TUTOR_USER_PROMPT)
@@ -215,7 +215,7 @@ class ModelRuntimeTest(unittest.TestCase):
             reranker_model_id="Qwen/Qwen3-Reranker-8B",
         )
 
-        with patch("eduflowgraph.llm.request.urlopen", side_effect=fake_urlopen):
+        with patch("EduFlowGraph.llm.request.urlopen", side_effect=fake_urlopen):
             ranked = client.rerank(
                 "why is P(A|B) not equal to P(B|A)?",
                 [

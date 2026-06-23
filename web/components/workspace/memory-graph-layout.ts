@@ -114,10 +114,13 @@ function normalizeKey(value: unknown): string {
 }
 
 function episodeGroupKey(episode: DashboardSnapshot["episodes"][number]): string {
+  const title = episode.title || "";
+  const obstacle = episode.learner?.obstacle || "";
+  const strategy = episode.tutor?.strategy || "";
   return [
-    normalizeKey(episode.summary?.title),
-    normalizeKey(episode.learner_problem?.detected_problem),
-    normalizeKey(episode.tutor_action?.main_strategy),
+    normalizeKey(title),
+    normalizeKey(obstacle),
+    normalizeKey(strategy),
   ].join("::");
 }
 
@@ -127,7 +130,8 @@ function episodeGroupId(episodes: DashboardSnapshot["episodes"]): string {
   }
 
   const first = episodes[0];
-  const slug = normalizeKey(first.summary?.title)
+  const titleStr = typeof first.title === "string" ? first.title : "";
+  const slug = normalizeKey(titleStr)
     .replace(/[^a-z0-9\u4e00-\u9fa5]+/gi, "_")
     .replace(/^_+|_+$/g, "")
     .slice(0, 48);
@@ -251,7 +255,7 @@ export function buildMemoryGraphModel(
       if (degreeDelta !== 0) {
         return degreeDelta;
       }
-      return left[0].summary.title.localeCompare(right[0].summary.title);
+      return (left[0].title || "").localeCompare(right[0].title || "");
     })
     .map((episodes, index, items) => {
       const episode = episodes[0];
@@ -265,7 +269,7 @@ export function buildMemoryGraphModel(
         id: groupId,
         kind: "episode" as const,
         layerIndex: 2,
-        title: episode.summary.title,
+        title: episode.title || "",
         subtitle:
           mergedCount > 1
             ? `${mergedCount} traces · ${episode.episode_type.replaceAll("_", " ")}`
@@ -273,9 +277,9 @@ export function buildMemoryGraphModel(
         summary:
           mergedCount > 1
             ? `聚合了 ${mergedCount} 条同主题学习片段：${
-                episode.summary.short_summary || episode.summary.topic_summary
+                typeof episode.summary === "string" ? episode.summary : ""
               }`
-            : episode.summary.short_summary || episode.summary.topic_summary,
+            : typeof episode.summary === "string" ? episode.summary : "",
         radius: clampNodeRadius("episode", connectedNodeIds.length),
         orbitRadius,
         orbitAngle,

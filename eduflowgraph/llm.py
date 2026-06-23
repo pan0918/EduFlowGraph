@@ -5,6 +5,10 @@ from urllib import error, request
 
 from .prompts import RERANK_FALLBACK_PROMPT
 
+_RETRYABLE_HTTP_CODES = {408, 429, 500, 502, 503, 504}
+_MAX_HTTP_ATTEMPTS = 3
+_RETRY_BASE_DELAY_SEC = 1.0
+
 
 def _safe_preview(value: str, limit: int = 240) -> str:
     value = value.strip()
@@ -98,6 +102,24 @@ class LLMClient:
         headers.update(extra_headers)
         return headers
 
+    def _retry_delay(self, attempt: int) -> float:
+        return _RETRY_BASE_DELAY_SEC * (2 ** attempt)
+
+    def _should_retry_http(self, exc: error.HTTPError) -> bool:
+        return exc.code in _RETRYABLE_HTTP_CODES
+
+    def _should_retry_transport(self, exc: Exception) -> bool:
+        if isinstance(exc, TimeoutError):
+            return True
+        if isinstance(exc, error.URLError):
+            reason = getattr(exc, "reason", None)
+            if isinstance(reason, TimeoutError):
+                return True
+            return True
+        if isinstance(exc, OSError):
+            return True
+        return False
+
     def _post_json(
         self,
         url: str,
@@ -113,27 +135,43 @@ class LLMClient:
             extra_headers=extra_headers,
             api_version=api_version,
         )
-        req = request.Request(
-            url,
-            data=body,
-            headers=headers,
-            method="POST",
-        )
-        started = time.perf_counter()
-        with request.urlopen(req, timeout=60) as response:
-            data = json.loads(response.read().decode("utf-8"))
-        latency_ms = round((time.perf_counter() - started) * 1000, 1)
-        return data, {
-            "url": url,
-            "latency_ms": latency_ms,
-            "request_preview": {
-                "headers": {
-                    key: ("<redacted>" if key.lower() == "authorization" else value)
-                    for key, value in headers.items()
-                },
-                "payload": payload,
-            },
-        }
+        last_exc: Exception | None = None
+        for attempt in range(_MAX_HTTP_ATTEMPTS):
+            req = request.Request(
+                url,
+                data=body,
+                headers=headers,
+                method="POST",
+            )
+            started = time.perf_counter()
+            try:
+                with request.urlopen(req, timeout=60) as response:
+                    data = json.loads(response.read().decode("utf-8"))
+                latency_ms = round((time.perf_counter() - started) * 1000, 1)
+                return data, {
+                    "url": url,
+                    "latency_ms": latency_ms,
+                    "request_preview": {
+                        "headers": {
+                            key: ("<redacted>" if key.lower() == "authorization" else value)
+                            for key, value in headers.items()
+                        },
+                        "payload": payload,
+                    },
+                }
+            except error.HTTPError as exc:
+                last_exc = exc
+                if attempt >= _MAX_HTTP_ATTEMPTS - 1 or not self._should_retry_http(exc):
+                    raise
+                time.sleep(self._retry_delay(attempt))
+            except Exception as exc:
+                last_exc = exc
+                if attempt >= _MAX_HTTP_ATTEMPTS - 1 or not self._should_retry_transport(exc):
+                    raise
+                time.sleep(self._retry_delay(attempt))
+        if last_exc is not None:
+            raise last_exc
+        raise RuntimeError("HTTP request failed without an exception")
 
     def _should_send_rerank_instruction(self) -> bool:
         model = (self.reranker_model_id or "").lower()
@@ -162,13 +200,13 @@ class LLMClient:
     def _extract_chat_content(self, data: dict[str, Any]) -> str:
         try:
             return str(data["choices"][0]["message"]["content"])
-        except Exception as exc:  # pragma: no cover - guarded by tests
+        except Exception as exc:
             raise ValueError("Chat response does not contain choices[0].message.content") from exc
 
     def _extract_embedding_vector(self, data: dict[str, Any]) -> list[float]:
         try:
             vector = data["data"][0]["embedding"]
-        except Exception as exc:  # pragma: no cover - guarded by tests
+        except Exception as exc:
             raise ValueError("Embedding response does not contain data[0].embedding") from exc
         if not isinstance(vector, list):
             raise ValueError("Embedding response field data[0].embedding is not a list")
@@ -274,40 +312,57 @@ class LLMClient:
             api_version=self.llm_api_version,
         )
         headers["Accept"] = "text/event-stream"
-        req = request.Request(
-            self._chat_endpoint(),
-            data=body,
-            headers=headers,
-            method="POST",
-        )
-        with request.urlopen(req, timeout=60) as response:
-            for raw_line in response:
-                line = raw_line.decode("utf-8", errors="ignore").strip()
-                if not line or not line.startswith("data:"):
-                    continue
-                payload_text = line.removeprefix("data:").strip()
-                if payload_text == "[DONE]":
-                    break
-                try:
-                    chunk = json.loads(payload_text)
-                except json.JSONDecodeError:
-                    continue
-                usage = chunk.get("usage")
-                if usage:
-                    yield {"type": "usage", "usage": usage}
-                    continue
-                for choice in chunk.get("choices", []):
-                    delta_payload = choice.get("delta", {})
-                    reasoning = (
-                        delta_payload.get("reasoning_content")
-                        or delta_payload.get("reasoning")
-                        or delta_payload.get("reasoning_text")
-                    )
-                    if reasoning:
-                        yield {"type": "reasoning", "delta": str(reasoning)}
-                    delta = delta_payload.get("content")
-                    if delta:
-                        yield {"type": "delta", "delta": str(delta)}
+        last_exc: Exception | None = None
+        for attempt in range(_MAX_HTTP_ATTEMPTS):
+            req = request.Request(
+                self._chat_endpoint(),
+                data=body,
+                headers=headers,
+                method="POST",
+            )
+            try:
+                with request.urlopen(req, timeout=60) as response:
+                    for raw_line in response:
+                        line = raw_line.decode("utf-8", errors="ignore").strip()
+                        if not line or not line.startswith("data:"):
+                            continue
+                        payload_text = line.removeprefix("data:").strip()
+                        if payload_text == "[DONE]":
+                            break
+                        try:
+                            chunk = json.loads(payload_text)
+                        except json.JSONDecodeError:
+                            continue
+                        usage = chunk.get("usage")
+                        if usage:
+                            yield {"type": "usage", "usage": usage}
+                            continue
+                        for choice in chunk.get("choices", []):
+                            delta_payload = choice.get("delta", {})
+                            reasoning = (
+                                delta_payload.get("reasoning_content")
+                                or delta_payload.get("reasoning")
+                                or delta_payload.get("reasoning_text")
+                            )
+                            if reasoning:
+                                yield {"type": "reasoning", "delta": str(reasoning)}
+                            delta = delta_payload.get("content")
+                            if delta:
+                                yield {"type": "delta", "delta": str(delta)}
+                return
+            except error.HTTPError as exc:
+                last_exc = exc
+                if attempt >= _MAX_HTTP_ATTEMPTS - 1 or not self._should_retry_http(exc):
+                    raise
+                time.sleep(self._retry_delay(attempt))
+            except Exception as exc:
+                last_exc = exc
+                if attempt >= _MAX_HTTP_ATTEMPTS - 1 or not self._should_retry_transport(exc):
+                    raise
+                time.sleep(self._retry_delay(attempt))
+        if last_exc is not None:
+            raise last_exc
+        raise RuntimeError("Streaming chat request failed without an exception")
 
     def embedding(self, text: str) -> list[float]:
         if not self.embedding_is_live:
@@ -629,10 +684,10 @@ class LLMClient:
             return '{"should_extract": false}'
         if "贝叶斯" in prompt or "检测准确率" in prompt or "P(A|B)" in prompt:
             return (
-                "你之前主要卡在“检测准确率”和“患病概率”的条件方向上。我们先把事件写清楚："
-                "P(阳性|患病) 是检测对病人的命中率，P(患病|阳性) 才是看到阳性后真正想问的后验概率。"
-                "它们中间还隔着先验概率，也就是人群里本来有多少人患病。"
-                "\n\n小检查：如果 1000 人里只有 10 人患病，检测灵敏度 90%，假阳性率 5%，阳性的人里大约有多少是真患病？"
+                '你之前主要卡在\u201c检测准确率\u201d和\u201c患病概率\u201d的条件方向上。我们先把事件写清楚：'
+                'P(阳性|患病) 是检测对病人的命中率，P(患病|阳性) 才是看到阳性后真正想问的后验概率。'
+                '它们中间还隔着先验概率，也就是人群里本来有多少人患病。'
+                '\n\n小检查：如果 1000 人里只有 10 人患病，检测灵敏度 90%，假阳性率 5%，阳性的人里大约有多少是真患病？'
             )
         return "我会先判断你卡在哪个概念，再用一个小例子解释。你能先说说你觉得最不确定的一步是什么吗？"
 

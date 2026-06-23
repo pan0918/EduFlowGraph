@@ -89,12 +89,14 @@ test("summarizeRetrieval keeps an empty retrieval context visible", () => {
     conceptCount: 0,
     episodeCount: 0,
     skillCount: 0,
+    profileCount: 0,
     totalCount: 0,
     hasContext: true,
     staleVectors: 0,
     conceptHits: 0,
     episodeHits: 0,
     skillHits: 0,
+    profileHits: 0,
   });
 });
 

@@ -1,11 +1,11 @@
 import type { DashboardSnapshot } from "@/lib/types";
 
 export function MetricCards({ snapshot }: { snapshot: DashboardSnapshot }) {
-  const cards = [
-    ["事件流", snapshot.events.length],
+  const cards: [string, number][] = [
     ["概念节点", snapshot.concepts.length],
     ["片段节点", snapshot.episodes.length],
     ["技能节点", snapshot.skills.length],
+    ["图谱边数", snapshot.edges.length],
   ];
   return (
     <div className="grid gap-3 md:grid-cols-4">

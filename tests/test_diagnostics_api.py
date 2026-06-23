@@ -2,7 +2,7 @@ import unittest
 
 from fastapi.testclient import TestClient
 
-from eduflowgraph.web_app import app
+from EduFlowGraph.web_app import app
 
 
 class DiagnosticsApiTest(unittest.TestCase):

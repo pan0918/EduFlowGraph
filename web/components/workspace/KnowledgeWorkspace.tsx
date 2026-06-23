@@ -2,6 +2,7 @@
 
 import { useWorkspace } from "@/components/providers/WorkspaceProvider";
 import { MetricCards } from "@/components/workspace/MetricCards";
+import { formatBeijingTime } from "@/lib/datetime";
 
 export function KnowledgeWorkspace() {
   const { snapshot } = useWorkspace();
@@ -15,12 +16,12 @@ export function KnowledgeWorkspace() {
     const stats = conceptStats.get(edge.target) || { count: 0, latestMainTitle: null };
     stats.count += 1;
     if (!stats.latestMainTitle && edge.metadata?.structural_role === "main") {
-      stats.latestMainTitle = episodeById.get(edge.source)?.summary.title || null;
+      stats.latestMainTitle = episodeById.get(edge.source)?.title || null;
     }
     conceptStats.set(edge.target, stats);
   }
   return (
-    <div className="min-h-screen bg-[var(--background)] px-8 py-7">
+    <div className="page-shell min-h-screen">
       <div className="mb-6">
         <div className="text-xs uppercase tracking-[0.2em] text-[var(--muted-foreground)]">
           知识状态
@@ -81,7 +82,7 @@ export function KnowledgeWorkspace() {
                   更新时间
                 </div>
                 <div className="mt-3 text-sm leading-6 text-[var(--foreground)]">
-                  {concept.metadata.updated_at}
+                  {formatBeijingTime(concept.metadata.updated_at) ?? "未记录"}
                 </div>
               </div>
             ) : null}

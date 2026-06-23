@@ -1,11 +1,9 @@
 import json
-from pathlib import Path
 from typing import Any
 
-from .llm import messages_for_prompt
+from ..llm import messages_for_prompt
+from ..prompts import EPISODE_DETECTION_PROMPT
 
-
-PROMPT_PATH = Path(__file__).resolve().parent / "Prompt" / "Episode_Detection_Prompt.md"
 
 DEFAULT_DECISION = {
     "should_end": False,
@@ -278,8 +276,8 @@ def _has_extractable_learning_content(events: list[dict[str, Any]]) -> bool:
 
 def _topic_terms(text: str) -> set[str]:
     lowered = text.lower()
-    terms = set()
-    current = []
+    terms: set[str] = set()
+    current: list[str] = []
     for char in lowered:
         if char.isascii() and char.isalnum():
             current.append(char)
@@ -294,8 +292,8 @@ def _topic_terms(text: str) -> set[str]:
         if token not in STOP_TOPIC_TERMS:
             terms.add(token)
 
-    chinese_chunks = []
-    current_chunk = []
+    chinese_chunks: list[str] = []
+    current_chunk: list[str] = []
     for char in text:
         if "\u4e00" <= char <= "\u9fff":
             current_chunk.append(char)
@@ -314,6 +312,15 @@ def _topic_terms(text: str) -> set[str]:
     return terms
 
 
+def _all_contents(events: list[dict[str, Any]]) -> list[str]:
+    """Return all message contents (student + assistant) from events."""
+    return [
+        str(event.get("content", "")).strip()
+        for event in events
+        if str(event.get("content", "")).strip()
+    ]
+
+
 def _looks_like_topic_shift(
     history: list[dict[str, Any]],
     new_messages: list[dict[str, Any]],
@@ -329,20 +336,47 @@ def _looks_like_topic_shift(
     if any(marker in normalized for marker in CONTINUATION_MARKERS):
         return False
 
-    history_text = "\n".join(_student_contents(history))
+    history_text = "\n".join(_all_contents(history))
     history_terms = _topic_terms(history_text)
     new_terms = _topic_terms(latest_student)
     if not history_terms or not new_terms:
         return False
     overlap = len(history_terms & new_terms) / max(1, min(len(history_terms), len(new_terms)))
-    return overlap < 0.18
+    return overlap < 0.15
+
+
+class BufferManager:
+    """Manages per-session turn buffers for episode boundary detection."""
+
+    def __init__(self) -> None:
+        self.turns_by_session: dict[str, list[dict[str, Any]]] = {}
+
+    def add_turn(self, session_id: str, turn: dict[str, Any]) -> None:
+        self.turns_by_session.setdefault(session_id, []).append(turn)
+
+    def get_buffer(self, session_id: str) -> list[dict[str, Any]]:
+        return list(self.turns_by_session.get(session_id, []))
+
+    def consume(self, session_id: str) -> list[dict[str, Any]]:
+        turns = self.turns_by_session.get(session_id, [])
+        self.turns_by_session[session_id] = []
+        return turns
+
+    def consume_prefix(self, session_id: str, count: int) -> list[dict[str, Any]]:
+        turns = self.turns_by_session.get(session_id, [])
+        consumed = turns[:max(0, count)]
+        self.turns_by_session[session_id] = turns[max(0, count):]
+        return consumed
+
+    def buffer_size(self, session_id: str) -> int:
+        return len(self.turns_by_session.get(session_id, []))
 
 
 class EpisodeBoundaryDetector:
-    def __init__(self, llm: Any, max_events: int):
+    def __init__(self, llm: Any, max_events: int) -> None:
         self.llm = llm
         self.max_events = max(2, max_events)
-        self.prompt_template = PROMPT_PATH.read_text(encoding="utf-8")
+        self.prompt_template = EPISODE_DETECTION_PROMPT
 
     @property
     def hard_max_events(self) -> int:
@@ -364,7 +398,7 @@ class EpisodeBoundaryDetector:
             try:
                 prompt = (
                     self.prompt_template
-                    .replace("{history}", _render_events(history))
+                    .replace("{hsitory}", _render_events(history))
                     .replace("{time_gap}", time_gap)
                     .replace("{new_messages}", _render_events(new_messages))
                     .replace(

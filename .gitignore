@@ -4,8 +4,14 @@ __pycache__/
 *.pyc
 .pytest_cache/
 data/*.jsonl
+data/conversations/*.jsonl
 data/graph_nodes.json
 data/graph_edges.json
+data/learner_profile.json
+data/*.db
+data/*.db-wal
+data/*.db-shm
+data/*.db.tmp
 .env
 .DS_Store
 web/.next/

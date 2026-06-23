@@ -487,7 +487,7 @@ export function SettingsWorkspace() {
   };
 
   return (
-    <div className="min-h-screen bg-[var(--background)] px-8 py-7">
+    <div className="page-shell min-h-screen">
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <SummaryCard
           title="后端"

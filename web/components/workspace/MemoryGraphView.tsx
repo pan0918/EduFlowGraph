@@ -4,6 +4,7 @@ import clsx from "clsx";
 import { useEffect, useMemo, useState } from "react";
 import type { DashboardSnapshot } from "@/lib/types";
 import { formatSkillDisplay } from "@/lib/skill-display";
+import { formatBeijingTime } from "@/lib/datetime";
 import {
   buildMemoryGraphModel,
   type MemoryGraphEdge,
@@ -123,7 +124,7 @@ function detailBody(
       metrics: [
         { label: "关联节点", value: String(node.connectedNodeIds.length) },
         { label: "图层", value: "L1" },
-        { label: "最近更新", value: raw.metadata?.updated_at?.slice(0, 10) || "未记录" },
+        { label: "最近更新", value: formatBeijingTime(raw.metadata?.updated_at, false) || "未记录" },
       ],
       bullets: raw.aliases?.length
         ? [`别名：${raw.aliases.slice(0, 4).join(" · ")}`]
@@ -135,29 +136,26 @@ function detailBody(
 
   if (node.kind === "episode") {
     const raw = node.raw as DashboardSnapshot["episodes"][number];
-    const score =
-      typeof raw.learning_outcome?.score === "number"
-        ? raw.learning_outcome.score.toFixed(2)
-        : "未记录";
+    const outcomeStatus = raw.outcome?.status || "未记录";
     return {
       eyebrow: "Episode",
-      title: raw.summary.title,
-      description: raw.summary.short_summary || raw.summary.topic_summary,
+      title: raw.title,
+      description: typeof raw.summary === "string" ? raw.summary : (raw.summary as unknown as Record<string, string>)?.short_summary || "",
       metrics: [
         ...(node.mergedCount > 1
           ? [{ label: "聚合片段", value: String(node.mergedCount) }]
           : []),
         { label: "片段类型", value: raw.episode_type.replaceAll("_", " ") },
-        { label: "结果评分", value: score },
+        { label: "结果", value: outcomeStatus },
         { label: "图层", value: "L2" },
       ],
       bullets: [
         node.mergedCount > 1
           ? `已合并：${node.sourceNodeIds.length} 条同主题记录`
           : "",
-        `学生问题：${raw.learner_problem.student_question}`,
-        `诊断：${raw.learner_problem.detected_problem}`,
-        raw.learning_outcome?.evidence ? `结果证据：${raw.learning_outcome.evidence}` : "",
+        raw.learner?.goal ? `学习目标：${raw.learner.goal}` : "",
+        raw.learner?.obstacle ? `障碍：${raw.learner.obstacle}` : "",
+        raw.outcome?.evidence ? `结果证据：${raw.outcome.evidence}` : "",
       ].filter(Boolean),
       connections,
       relationEvidence,

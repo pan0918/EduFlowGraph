@@ -7,7 +7,7 @@ import { formatSkillDisplay } from "@/lib/skill-display";
 export function SkillsWorkspace() {
   const { snapshot } = useWorkspace();
   return (
-    <div className="min-h-screen bg-[var(--background)] px-8 py-7">
+    <div className="page-shell min-h-screen">
       <div className="mb-6">
         <div className="text-xs uppercase tracking-[0.2em] text-[var(--muted-foreground)]">
           Space / 技能

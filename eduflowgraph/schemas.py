@@ -12,20 +12,46 @@ def make_id(prefix: str) -> str:
     return f"{prefix}_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{uuid4().hex[:6]}"
 
 
+EPISODE_TYPES = {
+    "concept_explanation",
+    "problem_solving",
+    "misconception_diagnosis",
+    "assessment",
+    "review",
+    "planning",
+    "other",
+}
+
+OUTCOME_STATUSES = {"success", "partial_success", "failed", "unresolved"}
+
+INITIAL_STATES = {"low", "partial", "mixed", "unclear", "unknown"}
+
+STRUCTURAL_ROLES = {"main", "supporting", "context"}
+LEARNER_STATES = {"confused", "clarified", "neutral"}
+
+
 @dataclass
-class Event:
-    event_id: str
-    stream_index: int
-    session_id: str
+class Turn:
+    """One complete user-assistant exchange persisted in ConversationLog."""
     turn_index: int
     timestamp: str
-    actor: str
-    event_type: str
-    content: str
-    segment_id: str | None = None
-    causation_id: str | None = None
-    correlation_id: str | None = None
+    session_id: str
+    user_message: str
+    assistant_message: str
     metadata: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class MemoryEvent:
+    """One state-change entry persisted in MemoryFlow."""
+    event_id: str
+    timestamp: str
+    event_type: str
+    session_id: str
+    payload: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
