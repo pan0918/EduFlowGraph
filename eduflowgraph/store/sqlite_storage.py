@@ -91,7 +91,7 @@ def decode_vector(blob: bytes, dimensions: int) -> list[float]:
     return values.astype(float).tolist()
 
 
-SCHEMA_V1 = """
+SCHEMA_V2 = """
 CREATE TABLE IF NOT EXISTS sessions (
     session_id TEXT PRIMARY KEY,
     created_at TEXT NOT NULL,
@@ -152,7 +152,7 @@ CREATE INDEX IF NOT EXISTS idx_edges_target_type ON edges(target, edge_type);
 
 CREATE TABLE IF NOT EXISTS profile_models (
     model_name TEXT PRIMARY KEY CHECK (
-        model_name IN ('learner_model', 'strategy_model', 'context_model')
+        model_name IN ('learner_model', 'teaching_adaptation_model', 'context_model')
     ),
     summary TEXT NOT NULL DEFAULT '',
     updated_at TEXT,
@@ -186,7 +186,7 @@ ON embeddings(provider, model_id, dimensions);
 
 
 class SQLiteStorage:
-    SCHEMA_VERSION = 1
+    SCHEMA_VERSION = 2
 
     def __init__(self, path: Path):
         self.path = Path(path)
@@ -209,24 +209,86 @@ class SQLiteStorage:
         with self.connect() as connection:
             connection.execute("PRAGMA journal_mode = WAL")
             version = int(connection.execute("PRAGMA user_version").fetchone()[0])
-            if version not in {0, self.SCHEMA_VERSION}:
+            if version not in {0, 1, self.SCHEMA_VERSION}:
                 raise StorageIntegrityError(
                     f"Unsupported SQLite schema version {version}; "
-                    f"expected {self.SCHEMA_VERSION}"
+                    f"expected 1 or {self.SCHEMA_VERSION}"
                 )
             if version == 0:
-                connection.executescript(SCHEMA_V1)
+                connection.executescript(SCHEMA_V2)
                 connection.execute(f"PRAGMA user_version = {self.SCHEMA_VERSION}")
+            elif version == 1:
+                self._migrate_v1_to_v2(connection)
             connection.executemany(
                 "INSERT OR IGNORE INTO profile_models"
                 "(model_name, summary, updated_at, revisions) VALUES (?, '', NULL, 0)",
                 [
                     ("learner_model",),
-                    ("strategy_model",),
+                    ("teaching_adaptation_model",),
                     ("context_model",),
                 ],
             )
             connection.commit()
+
+    @staticmethod
+    def _migrate_v1_to_v2(connection: sqlite3.Connection) -> None:
+        """Replace the legacy strategy profile with an empty adaptation profile."""
+        connection.commit()
+        connection.execute("PRAGMA foreign_keys = OFF")
+        try:
+            connection.executescript(
+                """
+                BEGIN IMMEDIATE;
+                ALTER TABLE profile_changes RENAME TO profile_changes_v1;
+                ALTER TABLE profile_models RENAME TO profile_models_v1;
+
+                CREATE TABLE profile_models (
+                    model_name TEXT PRIMARY KEY CHECK (
+                        model_name IN (
+                            'learner_model',
+                            'teaching_adaptation_model',
+                            'context_model'
+                        )
+                    ),
+                    summary TEXT NOT NULL DEFAULT '',
+                    updated_at TEXT,
+                    revisions INTEGER NOT NULL DEFAULT 0
+                );
+
+                INSERT INTO profile_models(model_name, summary, updated_at, revisions)
+                SELECT model_name, summary, updated_at, revisions
+                FROM profile_models_v1
+                WHERE model_name IN ('learner_model', 'context_model');
+
+                INSERT INTO profile_models(model_name, summary, updated_at, revisions)
+                VALUES ('teaching_adaptation_model', '', NULL, 0);
+
+                CREATE TABLE profile_changes (
+                    change_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    changed_at TEXT NOT NULL,
+                    model_name TEXT NOT NULL,
+                    note TEXT NOT NULL,
+                    FOREIGN KEY (model_name) REFERENCES profile_models(model_name)
+                );
+
+                INSERT INTO profile_changes(changed_at, model_name, note)
+                SELECT changed_at, model_name, note
+                FROM profile_changes_v1
+                WHERE model_name IN ('learner_model', 'context_model');
+
+                DROP TABLE profile_changes_v1;
+                DROP TABLE profile_models_v1;
+                CREATE INDEX idx_profile_changes_recent
+                ON profile_changes(change_id DESC);
+                PRAGMA user_version = 2;
+                COMMIT;
+                """
+            )
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.execute("PRAGMA foreign_keys = ON")
 
     @contextmanager
     def transaction(self) -> Iterator[sqlite3.Connection]:

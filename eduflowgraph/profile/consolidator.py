@@ -2,8 +2,8 @@
 
 Rewrites the three short profile paragraphs instead of accumulating evidence:
 
-* ``consolidate_episode`` rewrites ``learner_model`` + ``strategy_model`` at episode
-  boundaries (deep, stable signals) in a single LLM call.
+* ``consolidate_episode`` rewrites ``learner_model`` and
+  ``teaching_adaptation_model`` at episode boundaries in a single LLM call.
 * ``update_context`` lightly rewrites ``context_model`` every turn (time-sensitive).
 
 Both have a deterministic mock path (no live LLM) that performs real add/remove
@@ -22,7 +22,7 @@ from .dimensions import PROFILE_MODELS, model_budget
 
 _SENTENCE_SPLIT = re.compile(r"[。；\n]+")
 
-# Short Chinese labels for teaching actions used in strategy rules.
+# Short Chinese labels for teaching actions used in Skill preferences.
 _ACTION_LABELS: dict[str, str] = {
     "contrastive_explanation": "对比讲解",
     "step_by_step_guidance": "分步引导",
@@ -35,17 +35,16 @@ _ACTION_LABELS: dict[str, str] = {
     "guided_practice": "引导练习",
 }
 
-# Next-turn guidance templates keyed by teaching action (mock path).
-_ACTION_NEXT_RULE: dict[str, str] = {
-    "worked_example": "给小型完整例题并标出关键判断点，再让学生迁移到变式题",
-    "contrastive_explanation": "先对比易混概念差异，再放入同一情境举例",
-    "step_by_step_guidance": "拆成更小步骤逐步讲解，每步后做理解检查",
-    "socratic_questioning": "用诊断性追问让学生自己暴露缺口，再引导总结",
-    "concrete_example": "用具体数字/场景实例落地抽象概念，再映射回原问题",
-    "formula_decomposition": "拆解公式各项含义，再连回完整表达式",
-    "self_explanation_prompt": "请学生用自己的话复述，追问缺失环节后用新例验证",
-    "diagnostic_check": "出一道聚焦小测，根据作答决定是否继续支架",
-    "guided_practice": "在导师支持下完成一道同类练习，逐步撤除提示",
+_ACTION_VALIDATION_LABELS: dict[str, str] = {
+    "worked_example": "相似题迁移",
+    "contrastive_explanation": "让学生复述差异",
+    "step_by_step_guidance": "逐步撤除提示后的独立完成",
+    "socratic_questioning": "让学生自行总结规则",
+    "concrete_example": "从具体例子映射回抽象概念",
+    "formula_decomposition": "解释各公式项含义",
+    "self_explanation_prompt": "学生复述与换例迁移",
+    "diagnostic_check": "短诊断题",
+    "guided_practice": "减少支架后的独立练习",
 }
 
 
@@ -53,7 +52,7 @@ class ProfileConsolidator:
     def __init__(self, llm: Any):
         self.llm = llm
 
-    # ── Episode-level: learner_model + strategy_model ───────────────
+    # ── Episode-level: learner + teaching adaptation ───────────────
 
     def consolidate_episode(
         self,
@@ -97,9 +96,9 @@ class ProfileConsolidator:
         ]
         prompt = PROFILE_UPDATE_PROMPT.format(
             learner_budget=model_budget("learner_model"),
-            strategy_budget=model_budget("strategy_model"),
+            adaptation_budget=model_budget("teaching_adaptation_model"),
             learner_current=current.get("learner_model", "") or "（暂无）",
-            strategy_current=current.get("strategy_model", "") or "（暂无）",
+            adaptation_current=current.get("teaching_adaptation_model", "") or "（暂无）",
             episode_title=episode.get("title", ""),
             episode_summary=episode.get("summary", ""),
             episode_learner=f"目标：{learner.get('goal', '')}；障碍：{learner.get('obstacle', '')}",
@@ -113,7 +112,7 @@ class ProfileConsolidator:
         raw = self.llm.chat(messages_for_prompt(prompt), temperature=0)
         payload = _extract_json(raw)
         updates: dict[str, dict[str, str]] = {}
-        for model_name in ("learner_model", "strategy_model"):
+        for model_name in ("learner_model", "teaching_adaptation_model"):
             entry = payload.get(model_name)
             if isinstance(entry, dict):
                 summary = self._sanitize_summary(
@@ -181,34 +180,39 @@ class ProfileConsolidator:
         if note:
             updates["learner_model"] = {"summary": merged, "note": note}
 
-        # ── strategy_model: actionable next-turn rules ──
+        # ── teaching_adaptation_model: generalized Skill preferences ──
         if actions or next_step:
             primary = actions[0] if actions else ""
-            action_label = _ACTION_LABELS.get(primary, primary) if primary else "分步讲解"
-            next_hint = _ACTION_NEXT_RULE.get(primary, "先诊断卡点，再选更小粒度的讲解路径")
+            action_label = _ACTION_LABELS.get(primary, primary) if primary else "低认知负荷讲解"
+            difficulty = obstacle or "类似学习困难"
+            validation = _ACTION_VALIDATION_LABELS.get(primary, "简短理解检查")
             if status in ("success", "partial_success"):
-                trigger = f"当继续学习「{topic}」或相邻概念时"
-                strat_sentence = f"{trigger}→优先{action_label}→然后{next_hint}"
+                adaptation_sentence = (
+                    f"当学生出现{difficulty}时，更适合优先选择{action_label}类 Skill，"
+                    f"并通过{validation}确认适配效果；该偏好仍待跨主题验证"
+                )
             elif status == "failed":
-                trigger = f"当学生在「{topic}」再次卡住时"
-                strat_sentence = (
-                    f"{trigger}→避免重复同一讲法，改试{action_label}→然后{next_hint}"
+                adaptation_sentence = (
+                    f"当学生出现{difficulty}时，应降低{action_label}类 Skill 的优先级，"
+                    "优先尝试不同认知负荷或表达路径"
                 )
             else:
-                trigger = f"当围绕「{topic}」展开下一轮时"
-                strat_sentence = f"{trigger}→可尝试{action_label}→然后观察学生能否独立迁移"
+                adaptation_sentence = (
+                    f"学生出现{difficulty}时可谨慎尝试{action_label}类 Skill，"
+                    f"并用{validation}继续收集适配证据"
+                )
 
-            if next_step and next_step not in strat_sentence:
-                strat_sentence = f"{strat_sentence}；episode建议：{next_step}"
-
-            merged_s, note_s = _merge_sentence(
-                current.get("strategy_model", ""),
-                strat_sentence,
-                topic,
-                budget=model_budget("strategy_model"),
+            merged_adaptation, adaptation_note = _merge_sentence(
+                current.get("teaching_adaptation_model", ""),
+                adaptation_sentence,
+                primary or difficulty,
+                budget=model_budget("teaching_adaptation_model"),
             )
-            if note_s:
-                updates["strategy_model"] = {"summary": merged_s, "note": note_s}
+            if adaptation_note:
+                updates["teaching_adaptation_model"] = {
+                    "summary": merged_adaptation,
+                    "note": adaptation_note,
+                }
 
         return updates
 

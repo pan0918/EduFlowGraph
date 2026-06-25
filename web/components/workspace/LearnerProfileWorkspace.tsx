@@ -47,9 +47,9 @@ const MODEL_CONFIG: Record<ProfileModelName, ModelConfig> = {
     accentColor: "bg-amber-400",
     emptyHint: "跨多轮学习后，这里会沉淀稳定的认知特征；单次“懂了”不会直接记为已掌握。",
   },
-  strategy_model: {
-    label: "教学策略模型",
-    subtitle: "下一步教学 — 条件规则驱动具体动作",
+  teaching_adaptation_model: {
+    label: "教学适配模型",
+    subtitle: "Skill 选择 — 个性化重排与过滤依据",
     icon: Compass,
     headerBg: "bg-sky-50/80",
     headerBorder: "border-sky-100",
@@ -57,7 +57,7 @@ const MODEL_CONFIG: Record<ProfileModelName, ModelConfig> = {
     chipBg: "bg-sky-50",
     chipText: "text-sky-800",
     accentColor: "bg-sky-400",
-    emptyHint: "有效/无效的教学路径验证后，这里会形成“当…→优先…→然后…”的可执行规则。",
+    emptyHint: "积累足够学习证据后，这里会描述更适合或应避免的 Skill 类型、认知负荷、节奏与验证偏好。",
   },
   context_model: {
     label: "情境模型",
@@ -75,7 +75,7 @@ const MODEL_CONFIG: Record<ProfileModelName, ModelConfig> = {
 
 const MODEL_ORDER: ProfileModelName[] = [
   "learner_model",
-  "strategy_model",
+  "teaching_adaptation_model",
   "context_model",
 ];
 
@@ -176,7 +176,7 @@ export function LearnerProfileWorkspace() {
         </div>
         <h1 className="mt-2 text-3xl font-semibold tracking-tight">学习者画像</h1>
         <p className="mt-2 max-w-3xl text-sm leading-6 text-[var(--muted-foreground)]">
-          轻量画像：学习者模型沉淀长期稳定特征（口头“懂了”不作已掌握结论）；教学策略模型给出可执行的下一步规则；情境模型仅描述当前任务、阶段与情绪。
+          轻量画像：学习者模型沉淀长期认知特征；情境模型描述当前任务、阶段与情绪；教学适配模型只为 Skill 的个性化重排、过滤和轻量调节提供依据。
         </p>
       </div>
 
@@ -252,7 +252,7 @@ export function LearnerProfileWorkspace() {
               还没有学习画像
             </h2>
             <p className="mt-3 max-w-md text-sm leading-7 text-[var(--muted-foreground)]">
-              系统会从真实教学对话中持续提炼三段轻量画像：学习者模型、教学策略模型与情境模型。开始一段对话后它们会逐步成形。
+              系统会从真实教学对话中持续提炼学习者模型、情境模型和教学适配模型；教学程序本身保存在 Skill 节点中。
             </p>
             <div className="mt-8 flex flex-wrap justify-center gap-2">
               {MODEL_ORDER.map((m) => {

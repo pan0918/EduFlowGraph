@@ -62,6 +62,30 @@ CONCEPT_FAMILY_MARKERS = {
 }
 
 
+# These groups describe compatible learner obstacles, not subject domains.  They
+# deliberately stay small and explainable: concept names never decide whether a
+# teaching method can transfer to a new topic.
+DIFFICULTY_COMPATIBILITY_GROUPS = (
+    frozenset({"symbol_grounding", "procedural_gap"}),
+    frozenset({"abstraction_gap", "conceptual_confusion"}),
+    frozenset({"direction_confusion"}),
+    frozenset({"transfer_failure"}),
+)
+
+ACTION_NAME_PHRASES = {
+    "contrastive_explanation": "对比解释",
+    "step_by_step_guidance": "分步引导",
+    "worked_example": "例题示范",
+    "socratic_questioning": "递进追问",
+    "concrete_example": "具体例子",
+    "formula_decomposition": "公式拆解",
+    "self_explanation_prompt": "自我解释",
+    "diagnostic_check": "诊断检查",
+    "guided_practice": "引导练习",
+    "error_correction": "错误纠正",
+}
+
+
 def concept_family_keys(value: str) -> set[str]:
     normalized = normalize_name(value)
     if not normalized:
@@ -309,13 +333,15 @@ def _pattern_success_criteria(pattern: str) -> list[str]:
     return criteria.get(pattern, [])
 
 
-def _build_skill_id(pattern: str, actions: list[str], concept_scope: list[str]) -> str:
-    slug_parts = [pattern, *actions[:2]]
+def _build_skill_id(patterns: list[str], actions: list[str]) -> str:
+    canonical_patterns = sorted(set(patterns))
+    canonical_actions = sorted(set(actions))
+    slug_parts = [*canonical_patterns[:2], *canonical_actions[:2]]
     slug = re.sub(r"[^a-z0-9]+", "_", "_".join(slug_parts).lower()).strip("_")
     if slug:
         return f"skill_{slug}"
-    scope = "|".join(concept_scope)
-    digest = hashlib.md5(f"{pattern}|{scope}".encode("utf-8")).hexdigest()[:10]
+    signature = "|".join([*canonical_patterns, *canonical_actions])
+    digest = hashlib.md5(signature.encode("utf-8")).hexdigest()[:10]
     return f"skill_{digest}"
 
 
@@ -377,6 +403,58 @@ def same_concept_family(left: list[str], right: list[str]) -> bool:
     return bool(left_set & right_set)
 
 
+def _normalize_difficulty_patterns(values: Any) -> list[str]:
+    if isinstance(values, str):
+        candidates = [values]
+    elif isinstance(values, (list, tuple, set)):
+        candidates = list(values)
+    else:
+        candidates = []
+    normalized: list[str] = []
+    for item in candidates:
+        pattern = str(item).strip()
+        if (
+            pattern in DIFFICULTY_PATTERNS
+            and pattern != "unknown"
+            and pattern not in normalized
+        ):
+            normalized.append(pattern)
+    return normalized
+
+
+def skill_difficulty_patterns(skill: dict[str, Any]) -> list[str]:
+    """Return generalized patterns while preserving legacy singular Skills."""
+
+    patterns = _normalize_difficulty_patterns(skill.get("difficulty_patterns", []))
+    primary = _normalize_difficulty_patterns(skill.get("difficulty_pattern", ""))
+    for pattern in primary:
+        if pattern not in patterns:
+            patterns.insert(0, pattern)
+    return patterns
+
+
+def evidence_difficulty_patterns(evidence: dict[str, Any]) -> list[str]:
+    patterns = _normalize_difficulty_patterns(evidence.get("difficulty_patterns", []))
+    primary = _normalize_difficulty_patterns(evidence.get("difficulty_pattern", ""))
+    for pattern in primary:
+        if pattern not in patterns:
+            patterns.insert(0, pattern)
+    return patterns
+
+
+def difficulty_patterns_compatible(left: list[str], right: list[str]) -> bool:
+    left_set = set(_normalize_difficulty_patterns(left))
+    right_set = set(_normalize_difficulty_patterns(right))
+    if not left_set or not right_set:
+        return False
+    if left_set & right_set:
+        return True
+    return any(
+        bool(left_set & group) and bool(right_set & group)
+        for group in DIFFICULTY_COMPATIBILITY_GROUPS
+    )
+
+
 def skill_evidence_concept_scope(skill: dict[str, Any]) -> list[str]:
     metadata = skill.get("metadata", {})
     scope = metadata.get("evidence_concept_scope", skill.get("concept_scope", []))
@@ -396,22 +474,135 @@ def action_overlap(left: list[str], right: list[str]) -> float:
 
 
 def skill_matches_evidence(skill: dict[str, Any], evidence: dict[str, Any]) -> bool:
-    if skill.get("difficulty_pattern") != evidence.get("difficulty_pattern"):
+    if not difficulty_patterns_compatible(
+        skill_difficulty_patterns(skill),
+        evidence_difficulty_patterns(evidence),
+    ):
         return False
     if action_overlap(skill.get("teaching_actions", []), evidence.get("teaching_actions", [])) < 0.6:
         return False
-    return same_concept_family(skill_evidence_concept_scope(skill), evidence.get("concept_names", []))
+    return True
 
 
 def skill_matches_candidate(existing: dict[str, Any], candidate: dict[str, Any]) -> bool:
-    if existing.get("difficulty_pattern") != candidate.get("difficulty_pattern"):
+    if not difficulty_patterns_compatible(
+        skill_difficulty_patterns(existing),
+        skill_difficulty_patterns(candidate),
+    ):
         return False
     if action_overlap(existing.get("teaching_actions", []), candidate.get("teaching_actions", [])) < 0.6:
         return False
-    return same_concept_family(
-        skill_evidence_concept_scope(existing),
-        skill_evidence_concept_scope(candidate),
-    )
+    return True
+
+
+def _ordered_difficulty_patterns(evidences: list[dict[str, Any]]) -> list[str]:
+    counter: Counter[str] = Counter()
+    first_seen: dict[str, int] = {}
+    for evidence in evidences:
+        for pattern in evidence_difficulty_patterns(evidence):
+            counter[pattern] += 1
+            first_seen.setdefault(pattern, len(first_seen))
+    return sorted(counter, key=lambda item: (-counter[item], first_seen[item]))
+
+
+def _stable_teaching_actions(evidences: list[dict[str, Any]]) -> list[str]:
+    counter: Counter[str] = Counter()
+    first_seen: dict[str, int] = {}
+    episode_action_sets: list[set[str]] = []
+    for evidence in evidences:
+        seen_in_episode: set[str] = set()
+        for action in evidence.get("teaching_actions", []):
+            name = str(action).strip()
+            if name not in TEACHING_ACTIONS or name in seen_in_episode:
+                continue
+            seen_in_episode.add(name)
+            counter[name] += 1
+            first_seen.setdefault(name, len(first_seen))
+        episode_action_sets.append(seen_in_episode)
+    minimum_support = max(2, (len(evidences) + 1) // 2)
+    stable = [name for name, count in counter.items() if count >= minimum_support]
+    stable.sort(key=lambda item: (-counter[item], first_seen[item]))
+    selected: list[str] = []
+    for action in stable:
+        if selected and any(
+            sum(
+                action in action_set and selected_action in action_set
+                for action_set in episode_action_sets
+            )
+            < 2
+            for selected_action in selected
+        ):
+            continue
+        selected.append(action)
+        if len(selected) == 4:
+            break
+    return selected
+
+
+def _patterns_trigger_phrase(patterns: list[str]) -> str:
+    pattern_set = set(patterns)
+    if pattern_set == {"symbol_grounding", "procedural_gap"}:
+        return "难以理解形式化表达或建立可执行推导步骤"
+    if pattern_set == {"abstraction_gap", "conceptual_confusion"}:
+        return "抽象概念尚未落地或概念边界不清"
+    phrases = [
+        DIFFICULTY_PATTERN_TAXONOMY[pattern]["trigger_phrase"]
+        for pattern in patterns
+        if pattern in DIFFICULTY_PATTERN_TAXONOMY
+    ]
+    return "、".join(phrases[:2]) or "出现可识别的学习困难"
+
+
+def _generalized_skill_name(patterns: list[str], actions: list[str]) -> str:
+    action_phrase = "与".join(
+        ACTION_NAME_PHRASES.get(action, action) for action in actions[:2]
+    ) or "结构化引导"
+    pattern_set = set(patterns)
+    if pattern_set == {"symbol_grounding", "procedural_gap"}:
+        return f"用{action_phrase}建立形式化理解路径"
+    if pattern_set == {"abstraction_gap", "conceptual_confusion"}:
+        return f"用{action_phrase}帮助抽象概念落地"
+    if len(patterns) == 1:
+        return _skill_name(patterns[0], action_phrase)
+    return f"用{action_phrase}处理相近学习困难"
+
+
+def _generalized_success_criteria(
+    patterns: list[str], actions: list[str]
+) -> list[str]:
+    criteria: list[str] = []
+    for pattern in patterns:
+        pattern_criteria = _pattern_success_criteria(pattern)
+        if pattern_criteria:
+            candidate = pattern_criteria[0]
+            if candidate not in criteria:
+                criteria.append(candidate)
+        if len(criteria) == 2:
+            return criteria
+    for action in actions:
+        candidate = ACTION_TO_SUCCESS_CRITERIA.get(action)
+        if candidate and candidate not in criteria:
+            criteria.append(candidate)
+        if len(criteria) == 2:
+            break
+    return criteria or ["学习者能在新情境中独立说明并应用关键方法。"]
+
+
+def _generalized_procedure(actions: list[str]) -> list[str]:
+    procedure: list[str] = []
+    for step_index in range(3):
+        for action in actions:
+            steps = TEACHING_ACTION_TAXONOMY.get(action, {}).get(
+                "procedure_steps", []
+            )
+            if step_index >= len(steps):
+                continue
+            step = str(steps[step_index]).strip()
+            if step and step not in procedure:
+                procedure.append(step)
+            if len(procedure) == 3:
+                return procedure
+    return procedure or ["用可复用的讲解流程引导学习者。"]
 
 
 class HeuristicSkillDistiller:
@@ -430,64 +621,50 @@ class HeuristicSkillDistiller:
         ]
         if len(set(source_episode_ids)) < 2:
             return None
-        pattern = str(evidences[-1].get("difficulty_pattern", "unknown"))
-        if pattern == "unknown":
+        difficulty_patterns = _ordered_difficulty_patterns(evidences)
+        if not difficulty_patterns:
+            return None
+        if any(
+            not difficulty_patterns_compatible([difficulty_patterns[0]], [pattern])
+            for pattern in difficulty_patterns[1:]
+        ):
             return None
         if not (has_learning_improvement(evidences) or has_repeated_success(evidences)):
             return None
 
         concept_counter: Counter[str] = Counter()
-        action_counter: Counter[str] = Counter()
         source_episode_ids = []
         for evidence in evidences:
             for name in evidence.get("concept_names", []):
                 normalized = normalize_name(name)
                 if normalized and normalized not in {"unknown", "learningconcept", "untitledconcept"}:
                     concept_counter[name] += 1
-            for action in evidence.get("teaching_actions", []):
-                if action in TEACHING_ACTIONS:
-                    action_counter[action] += 1
             episode_id = str(evidence.get("episode_id", "")).strip()
             if episode_id and episode_id not in source_episode_ids:
                 source_episode_ids.append(episode_id)
 
         concept_scope = [
-            name for name, _ in concept_counter.most_common(3)
+            name for name, _ in concept_counter.most_common(6)
         ]
         if not concept_scope:
             return None
-        teaching_actions = [
-            name for name, _ in action_counter.most_common(4)
-        ] or ["worked_example"]
+        teaching_actions = _stable_teaching_actions(evidences)
+        if not teaching_actions:
+            return None
 
-        action_labels = [
-            TEACHING_ACTION_TAXONOMY[action]["label"].lower()
-            for action in teaching_actions
-            if action in TEACHING_ACTION_TAXONOMY
-        ]
-        primary_action = action_labels[0] if action_labels else "引导式教学"
-        name = _skill_name(pattern, primary_action)
-        trigger = f"当学习者出现{_difficulty_phrase(pattern)}时使用。"
+        pattern = difficulty_patterns[0]
+        name = _generalized_skill_name(difficulty_patterns, teaching_actions)
+        trigger = f"当学习者{_patterns_trigger_phrase(difficulty_patterns)}时使用。"
 
-        procedure: list[str] = []
-        for action in teaching_actions:
-            for step in TEACHING_ACTION_TAXONOMY.get(action, {}).get("procedure_steps", []):
-                if step not in procedure:
-                    procedure.append(step)
-        procedure = procedure[:3] or ["用可复用的讲解流程引导学习者。"]
+        procedure = _generalized_procedure(teaching_actions)
 
-        success_criteria = _pattern_success_criteria(pattern)
-        for action in teaching_actions:
-            criterion = ACTION_TO_SUCCESS_CRITERIA.get(action)
-            if criterion and criterion not in success_criteria:
-                success_criteria.append(criterion)
-        success_criteria = success_criteria[:2] or [
-            "学习者能在新例子中正确解释核心思想。"
-        ]
+        success_criteria = _generalized_success_criteria(
+            difficulty_patterns, teaching_actions
+        )
 
         confidence = _confidence_from_window(evidences)
         now = utc_now()
-        skill_id = _build_skill_id(pattern, teaching_actions, concept_scope)
+        skill_id = _build_skill_id(difficulty_patterns, teaching_actions)
         skill = {
             "skill_id": skill_id,
             "node_id": skill_id,
@@ -496,6 +673,7 @@ class HeuristicSkillDistiller:
             "status": "candidate",
             "trigger": trigger,
             "difficulty_pattern": pattern,
+            "difficulty_patterns": difficulty_patterns,
             "teaching_actions": teaching_actions,
             "procedure": procedure,
             "success_criteria": success_criteria,
@@ -509,13 +687,15 @@ class HeuristicSkillDistiller:
             "metadata": {
                 "created_at": now,
                 "updated_at": now,
-                "extractor_version": "skill_distiller_v1_fallback",
+                "extractor_version": "skill_distiller_v2_fallback",
+                "generalization_version": "behavioral_v2",
                 "source_episode_ids": source_episode_ids,
                 "evidence_concept_scope": concept_scope,
             },
             "embedding_text": (
-                f"教学技能：{name}。适用困难：{_difficulty_phrase(pattern)}。"
+                f"教学技能：{name}。适用困难：{_patterns_trigger_phrase(difficulty_patterns)}。"
                 f"教学动作：{', '.join(teaching_actions)}。"
+                f"成功信号：{'；'.join(success_criteria)}"
             ),
         }
 
@@ -535,12 +715,100 @@ class HeuristicSkillDistiller:
                     "metadata": {
                         "role": "source_evidence",
                         "confidence": max(0.7, confidence - 0.04),
-                        "extractor_version": "skill_distiller_v1_fallback",
+                        "extractor_version": "skill_distiller_v2_fallback",
                         "created_at": now,
                     },
                 }
             )
         return {"skill": skill, "edges": edges}
+
+
+GENERIC_CONCEPT_FRAGMENTS = {
+    "概念",
+    "公式",
+    "理论",
+    "方法",
+    "问题",
+    "目标",
+    "步骤",
+    "学习",
+    "理解",
+    "知识",
+    "推导",
+    "函数",
+}
+
+
+def _concept_specific_fragments(value: str) -> list[str]:
+    fragments: list[str] = []
+    normalized = normalize_name(value)
+    if len(normalized) >= 3:
+        fragments.append(normalized)
+    for token in re.findall(r"[a-zA-Z][a-zA-Z0-9_-]*", value):
+        normalized_token = normalize_name(token)
+        if len(normalized_token) >= 3 and normalized_token not in fragments:
+            fragments.append(normalized_token)
+    for sequence in re.findall(r"[\u4e00-\u9fff]+", value):
+        if len(sequence) == 2 and sequence not in GENERIC_CONCEPT_FRAGMENTS:
+            fragments.append(sequence)
+        for index in range(max(0, len(sequence) - 1)):
+            pair = sequence[index : index + 2]
+            if pair not in GENERIC_CONCEPT_FRAGMENTS and pair not in fragments:
+                fragments.append(pair)
+    return fragments
+
+
+def _evidence_specific_tokens(evidences: list[dict[str, Any]]) -> list[str]:
+    tokens: list[str] = []
+    for evidence in evidences:
+        episode_id = normalize_name(str(evidence.get("episode_id", "")))
+        if len(episode_id) >= 3 and episode_id not in tokens:
+            tokens.append(episode_id)
+        for value in [*evidence.get("concept_names", []), *evidence.get("concept_scope", [])]:
+            for fragment in _concept_specific_fragments(str(value)):
+                if fragment not in tokens:
+                    tokens.append(fragment)
+    return tokens
+
+
+def _public_text_is_generic(value: str, evidences: list[dict[str, Any]]) -> bool:
+    normalized = normalize_name(value)
+    if not normalized:
+        return False
+    if re.search(r"\d", value):
+        return False
+    return not any(
+        token in normalized for token in _evidence_specific_tokens(evidences)
+    )
+
+
+def _generic_text_or_fallback(
+    value: Any,
+    fallback: str,
+    evidences: list[dict[str, Any]],
+) -> str:
+    candidate = str(value or "").strip()
+    if candidate and _public_text_is_generic(candidate, evidences):
+        return candidate
+    return fallback
+
+
+def _generic_list_or_fallback(
+    values: Any,
+    fallback: list[str],
+    evidences: list[dict[str, Any]],
+    *,
+    limit: int,
+) -> list[str]:
+    if not isinstance(values, list):
+        return list(fallback[:limit])
+    generic = [
+        str(item).strip()
+        for item in values
+        if str(item).strip()
+        and _public_text_is_generic(str(item), evidences)
+    ]
+    return generic[:limit] if generic else list(fallback[:limit])
 
 
 def coerce_skill_distillation_payload_from_llm(
@@ -555,55 +823,44 @@ def coerce_skill_distillation_payload_from_llm(
         if payload.get("should_create_skill") is False:
             return None
         skill_payload = payload.get("skill", {})
+        if not isinstance(skill_payload, dict):
+            skill_payload = {}
         edges_payload = payload.get("edges", [])
         if fallback is None:
             return None
         skill = dict(fallback["skill"])
-        skill["name"] = str(skill_payload.get("name") or skill["name"]).strip()
+        skill["name"] = _generic_text_or_fallback(
+            skill_payload.get("name"), skill["name"], evidences
+        )
         skill["status"] = "candidate"
-        skill["trigger"] = str(skill_payload.get("trigger") or skill["trigger"]).strip()
+        skill["trigger"] = _generic_text_or_fallback(
+            skill_payload.get("trigger"), skill["trigger"], evidences
+        )
         metadata = dict(skill.get("metadata", {}))
-        evidence_scope = [
-            str(item).strip()
-            for item in skill_payload.get(
-                "evidence_concept_scope",
-                skill_payload.get("concept_scope", metadata.get("evidence_concept_scope", [])),
-            )
-            if str(item).strip()
-        ][:3]
-        if evidence_scope:
-            metadata["evidence_concept_scope"] = evidence_scope
         skill["metadata"] = metadata
         skill.pop("concept_scope", None)
-        difficulty_pattern = str(
-            skill_payload.get("difficulty_pattern", skill["difficulty_pattern"])
-        ).strip()
-        if difficulty_pattern in DIFFICULTY_PATTERNS:
-            skill["difficulty_pattern"] = difficulty_pattern
-        actions = []
-        for action in skill_payload.get("teaching_actions", skill["teaching_actions"]):
-            name = str(action).strip()
-            if name in TEACHING_ACTIONS and name not in actions:
-                actions.append(name)
-        if actions:
-            skill["teaching_actions"] = actions[:4]
-        procedure = [
-            str(item).strip()
-            for item in skill_payload.get("procedure", skill["procedure"])
-            if str(item).strip()
-        ]
-        if procedure:
-            skill["procedure"] = procedure[:3]
-        criteria = [
-            str(item).strip()
-            for item in skill_payload.get("success_criteria", skill["success_criteria"])
-            if str(item).strip()
-        ]
-        if criteria:
-            skill["success_criteria"] = criteria[:2]
-        skill["embedding_text"] = str(
-            skill_payload.get("embedding_text") or skill["embedding_text"]
-        ).strip()
+        # Difficulty patterns and actions are evidence-derived invariants.  The
+        # LLM may improve wording, but cannot narrow, widen, or specialize them.
+        skill["difficulty_patterns"] = list(fallback["skill"]["difficulty_patterns"])
+        skill["difficulty_pattern"] = fallback["skill"]["difficulty_pattern"]
+        skill["teaching_actions"] = list(fallback["skill"]["teaching_actions"])
+        skill["procedure"] = _generic_list_or_fallback(
+            skill_payload.get("procedure"),
+            fallback["skill"]["procedure"],
+            evidences,
+            limit=3,
+        )
+        skill["success_criteria"] = _generic_list_or_fallback(
+            skill_payload.get("success_criteria"),
+            fallback["skill"]["success_criteria"],
+            evidences,
+            limit=2,
+        )
+        skill["embedding_text"] = _generic_text_or_fallback(
+            skill_payload.get("embedding_text"),
+            fallback["skill"]["embedding_text"],
+            evidences,
+        )
 
         edge_map = {edge["source"]: dict(edge) for edge in fallback["edges"]}
         normalized_edges = []
@@ -636,6 +893,14 @@ def coerce_skill_distillation_payload_from_llm(
 
 def merge_skill_candidate(existing: dict[str, Any], candidate: dict[str, Any]) -> dict[str, Any]:
     merged = dict(existing)
+    merged_patterns = list(
+        dict.fromkeys(
+            [*skill_difficulty_patterns(existing), *skill_difficulty_patterns(candidate)]
+        )
+    )
+    merged["difficulty_patterns"] = merged_patterns
+    if merged_patterns:
+        merged["difficulty_pattern"] = merged_patterns[0]
     merged["teaching_actions"] = list(
         dict.fromkeys([*existing.get("teaching_actions", []), *candidate.get("teaching_actions", [])])
     )[:4]
@@ -681,8 +946,9 @@ def merge_skill_candidate(existing: dict[str, Any], candidate: dict[str, Any]) -
     metadata["updated_at"] = utc_now()
     metadata["extractor_version"] = candidate_metadata.get(
         "extractor_version",
-        metadata.get("extractor_version", "skill_distiller_v1_fallback"),
+        metadata.get("extractor_version", "skill_distiller_v2_fallback"),
     )
+    metadata["generalization_version"] = "behavioral_v2"
     merged["metadata"] = metadata
     merged.pop("concept_scope", None)
     merged["embedding_text"] = candidate.get("embedding_text") or existing.get("embedding_text", "")

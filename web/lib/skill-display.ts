@@ -6,21 +6,28 @@ const DIFFICULTY_LABELS: Record<string, string> = {
   procedural_gap: "步骤缺口",
   symbol_grounding: "符号含义未落地",
   transfer_failure: "迁移失败",
+  conceptual_confusion: "概念理解混淆",
   unknown: "未识别模式",
 };
 
 const ACTION_LABELS: Record<string, string> = {
   contrastive_explanation: "对比解释",
-  step_by_step_explanation: "分步骤讲解",
+  step_by_step_guidance: "分步骤引导",
   worked_example: "完整例题示范",
   socratic_questioning: "苏格拉底式追问",
-  minimal_numeric_example: "最小数字例子",
+  concrete_example: "具体例子",
   formula_decomposition: "公式拆解",
+  self_explanation_prompt: "学生自我解释",
   student_self_explanation: "学生自我解释",
   diagnostic_check: "诊断检查",
+  guided_practice: "引导练习",
+  error_correction: "错误纠正",
+  minimal_numeric_example: "最小数字例子",
+  step_by_step_explanation: "分步骤引导",
 };
 
 const STATUS_LABELS: Record<string, string> = {
+  seed: "种子技能",
   candidate: "候选技能",
   active: "已验证技能",
   retired: "已停用",
@@ -154,11 +161,19 @@ export function skillStatusLabel(value?: string): string {
 }
 
 export function formatSkillDisplay(skill: SkillNode): SkillDisplay {
+  const difficultyPatterns = Array.from(
+    new Set(
+      (skill.difficulty_patterns?.length
+        ? skill.difficulty_patterns
+        : [skill.difficulty_pattern]
+      ).filter(Boolean),
+    ),
+  );
   return {
     name: translateText(skill.name),
     trigger: translateText(skill.trigger || ""),
     status: skillStatusLabel(skill.status),
-    difficulty: skillDifficultyLabel(skill.difficulty_pattern),
+    difficulty: difficultyPatterns.map(skillDifficultyLabel).join("、"),
     teachingActions: (skill.teaching_actions || []).map(skillTeachingActionLabel).slice(0, 3),
     procedure: (skill.procedure || []).map(translateText).slice(0, 3),
     successCriteria: (skill.success_criteria || []).map(translateText).slice(0, 2),

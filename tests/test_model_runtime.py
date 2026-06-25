@@ -201,7 +201,14 @@ class ModelRuntimeTest(unittest.TestCase):
         def fake_urlopen(req, timeout=60):
             captured["url"] = req.full_url
             captured["body"] = json.loads(req.data.decode("utf-8"))
-            return FakeResponse({"results": [{"index": 1}, {"index": 0}]})
+            return FakeResponse(
+                {
+                    "results": [
+                        {"index": 1, "relevance_score": 0.91},
+                        {"index": 0, "relevance_score": 0.42},
+                    ]
+                }
+            )
 
         client = LLMClient(
             provider="openai-compatible",
@@ -234,6 +241,84 @@ class ModelRuntimeTest(unittest.TestCase):
         self.assertEqual(2, captured["body"]["top_n"])
         self.assertIn("instruction", captured["body"])
         self.assertEqual("candidate_2", ranked[0]["id"])
+        self.assertEqual(0, ranked[0]["rerank"]["rank"])
+        self.assertEqual(0.91, ranked[0]["rerank"]["relevance_score"])
+        self.assertEqual("siliconflow", ranked[0]["rerank"]["provider"])
+        self.assertEqual(
+            "Qwen/Qwen3-Reranker-8B",
+            ranked[0]["rerank"]["model_id"],
+        )
+
+    def test_rerank_preserves_order_only_results_with_null_score(self):
+        client = LLMClient(
+            provider="mock",
+            api_key="",
+            base_url="https://api.example.com/v1",
+            chat_model="chat-model",
+            embedding_model="embed-model",
+            reranker_provider="siliconflow",
+            reranker_api_key="rerank-key",
+            reranker_endpoint_url="https://api.siliconflow.cn/v1/rerank",
+            reranker_model_id="Qwen/Qwen3-Reranker-8B",
+        )
+        documents = [
+            {"id": "candidate_1", "text": "first candidate"},
+            {"id": "candidate_2", "text": "second candidate"},
+        ]
+
+        ranked = client._extract_rerank_results(
+            {"results": [{"index": 1}, {"index": 0}]},
+            documents,
+        )
+
+        self.assertEqual(["candidate_2", "candidate_1"], [item["id"] for item in ranked])
+        self.assertIsNone(ranked[0]["rerank"]["relevance_score"])
+        self.assertEqual("rank_only", ranked[0]["rerank"]["source"])
+
+    def test_rerank_rejects_non_finite_relevance_score(self):
+        client = LLMClient(
+            provider="mock",
+            api_key="",
+            base_url="https://api.example.com/v1",
+            chat_model="chat-model",
+            embedding_model="embed-model",
+        )
+
+        with self.assertRaisesRegex(ValueError, "finite"):
+            client._extract_rerank_results(
+                {"results": [{"index": 0, "relevance_score": float("nan")}]},
+                [{"id": "candidate_1", "text": "first candidate"}],
+            )
+
+    def test_rerank_can_disable_chat_model_fallback(self):
+        client = LLMClient(
+            provider="openai-compatible",
+            api_key="chat-key",
+            base_url="https://api.example.com/v1",
+            chat_model="chat-model",
+            embedding_model="embed-model",
+            reranker_provider="siliconflow",
+            reranker_api_key="rerank-key",
+            reranker_endpoint_url="https://api.siliconflow.cn/v1/rerank",
+            reranker_model_id="Qwen/Qwen3-Reranker-8B",
+        )
+        chat_calls = {"count": 0}
+
+        def fake_chat(messages, temperature=0.2):
+            chat_calls["count"] += 1
+            return '{"ordered_ids": ["candidate_1"]}'
+
+        client.chat = fake_chat  # type: ignore[method-assign]
+        with patch("EduFlowGraph.llm.request.urlopen", side_effect=TimeoutError("timeout")):
+            ranked = client.rerank(
+                "query",
+                [{"id": "candidate_1", "text": "candidate"}],
+                kind="skill_personalization",
+                allow_llm_fallback=False,
+            )
+
+        self.assertEqual(ranked, [])
+        self.assertEqual(chat_calls["count"], 0)
 
 
 if __name__ == "__main__":

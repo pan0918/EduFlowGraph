@@ -98,3 +98,21 @@ test("skill enum labels are Chinese", () => {
   assert.equal(skillDifficultyLabel("symbol_grounding"), "符号含义未落地");
   assert.equal(skillTeachingActionLabel("minimal_numeric_example"), "最小数字例子");
 });
+
+test("formatSkillDisplay renders all generalized difficulty patterns", () => {
+  const skill = {
+    node_id: "skill_formula_reasoning",
+    skill_id: "skill_formula_reasoning",
+    node_type: "skill",
+    name: "通过公式拆解与分步推导建立形式化理解",
+    status: "candidate",
+    trigger: "当学习者难以理解形式化表达或建立推导步骤时使用。",
+    difficulty_pattern: "symbol_grounding",
+    difficulty_patterns: ["symbol_grounding", "procedural_gap"],
+    teaching_actions: ["formula_decomposition", "step_by_step_guidance"],
+  };
+
+  const display = formatSkillDisplay(skill);
+
+  assert.equal(display.difficulty, "符号含义未落地、步骤缺口");
+});

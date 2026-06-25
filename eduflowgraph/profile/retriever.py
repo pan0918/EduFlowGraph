@@ -1,24 +1,25 @@
 """Lightweight profile rendering for the memory-augmented prompt.
 
-The profile is three short paragraphs, already consolidated and tiny, so there is no
-scoring or graph fusion to do — the relevant paragraphs are simply injected directly
-into the tutor context.
+Only the learner and current-context paragraphs are injected into the tutor context.
+The teaching-adaptation paragraph is reserved for Skill personalization and must not
+leak into the Tutor prompt as a complete block.
 """
 from __future__ import annotations
 
 from typing import Any
 
-from .dimensions import MODEL_NAMES, PROFILE_MODELS
+from .dimensions import PROFILE_MODELS
+
+_PROMPT_MODEL_NAMES = ("learner_model", "context_model")
 
 _SECTION_TITLES = {
     "learner_model": "[长期学习者画像]",
-    "strategy_model": "[下一步教学策略]",
     "context_model": "[当前学习情境]",
 }
 
 
 def render_profile_context(profile: dict[str, Any]) -> str:
-    """Render the three profile paragraphs into a context block for the prompt."""
+    """Render only prompt-safe profile paragraphs into a context block."""
     if not isinstance(profile, dict):
         return ""
     models = profile.get("models", {})
@@ -26,7 +27,7 @@ def render_profile_context(profile: dict[str, Any]) -> str:
         return ""
 
     sections: list[str] = []
-    for name in MODEL_NAMES:
+    for name in _PROMPT_MODEL_NAMES:
         entry = models.get(name, {})
         summary = ""
         if isinstance(entry, dict):

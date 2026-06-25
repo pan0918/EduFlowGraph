@@ -92,7 +92,7 @@ export function summarizeRetrieval(
   const skillCount = retrieval.skills.length;
   const profileModels = retrieval.profile?.models;
   const profileCount = profileModels
-    ? (["learner_model", "strategy_model", "context_model"] as const).filter(
+    ? (["learner_model", "teaching_adaptation_model", "context_model"] as const).filter(
         (m) => profileModels[m]?.summary?.trim(),
       ).length
     : 0;

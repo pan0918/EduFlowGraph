@@ -93,7 +93,7 @@ def make_legacy_data(root: Path) -> None:
                 "updated_at": "2026-06-23T00:00:04+00:00",
                 "revisions": 1,
             },
-            "strategy_model": {"summary": "", "updated_at": None, "revisions": 0},
+            "teaching_adaptation_model": {"summary": "", "updated_at": None, "revisions": 0},
             "context_model": {
                 "summary": "当前正在复习。",
                 "updated_at": "2026-06-23T00:00:05+00:00",

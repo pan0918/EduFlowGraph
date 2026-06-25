@@ -5,9 +5,10 @@ You maintain a **lightweight** learner profile made of exactly two short paragra
 1. `learner_model` — **Long-term, stable cognitive portrait** (not a single-episode report).
    Capture recurring knowledge gaps, misconceptions, reasoning habits, and **only**
    mastery that has been **repeatedly validated** across episodes — not one-off verbal claims.
-2. `strategy_model` — **Actionable teaching playbook** for the *next* tutoring turn.
-   Not a history log. Write conditional rules that **drive the tutor's next move**:
-   "when [learner state / topic / confusion pattern] → do [teaching action] → then [check / follow-up]".
+2. `teaching_adaptation_model` — **Long-term Skill selection preferences** for this learner.
+   Describe which types of teaching Skill fit or conflict with the learner's needs,
+   preferred cognitive load and pacing, and suitable verification style. It is evidence
+   for Skill reranking/filtering, not a teaching program.
 
 A new learning episode just finished. Rewrite each paragraph to absorb new evidence while
 staying small and sharp — like updating a personal memory note, not appending to a log.
@@ -17,7 +18,8 @@ staying small and sharp — like updating a personal memory note, not appending 
 - **Merge, don't append.** Fold new findings into existing prose.
 - **Delete aggressively.** Remove contradicted, resolved, stale, or redundant content.
 - **Stay within budget.** Concise Chinese prose:
-  `learner_model` ≤ {learner_budget} chars, `strategy_model` ≤ {strategy_budget} chars.
+  `learner_model` ≤ {learner_budget} chars,
+  `teaching_adaptation_model` ≤ {adaptation_budget} chars.
 - **Keep continuity** when existing content is still valid.
 
 ### learner_model — evidence discipline (critical)
@@ -34,15 +36,20 @@ This paragraph is **long-term stable**, not a snapshot of the latest episode.
   "近期在 X 上多次出现方向混淆" rather than "不懂 X".
 - If this episode adds nothing to long-term understanding, return the existing summary unchanged.
 
-### strategy_model — must drive next teaching (critical)
+### teaching_adaptation_model — Skill 选择偏好（关键）
 
-This paragraph must help the tutor **decide what to do next**, not just say "method X worked".
+This paragraph helps the system decide **which Skill to retrieve, promote, demote, or
+filter** for this learner.
 
-Each rule should read like:
-- **当** [触发条件：概念/误区/卡住点/学习阶段] → **优先** [具体教学动作，如对比讲解/分步引导/例题示范/诊断提问] → **然后** [验证方式：小测/让学生复述/换例迁移]
-- Include **avoid** rules when something failed: 避免再…，改试…
-- Prefer concrete teaching actions from the episode when available.
-- If `next_step` is provided, fold it into an actionable rule.
+- Generalize beyond the current topic: prefer "面对全新复杂概念时更适合类比引入类 Skill"
+  over "讲 PPO 时先举这个例子".
+- Describe positive preferences, negative/avoid preferences, cognitive load, pacing,
+  and verification style when supported by evidence.
+- One successful Episode creates only a cautious hypothesis. Strong preferences require
+  repeated, contrasting, or cross-topic evidence.
+- 不保存具体教学程序，不写某个知识点的完整推导、讲解步骤或答案模板；这些属于 Skill Node。
+- Do not merely repeat that an action was used. Explain what kind of learner state it fit
+  and how future Skill selection should be affected.
 
 If there is genuinely nothing worth changing for a model, return its existing summary unchanged
 and set `note` to "无变化".
@@ -52,8 +59,8 @@ and set `note` to "无变化".
 [learner_model]
 {learner_current}
 
-[strategy_model]
-{strategy_current}
+[teaching_adaptation_model]
+{adaptation_current}
 
 ## New episode
 
@@ -75,6 +82,6 @@ of what you added and removed.
 ```json
 {{
   "learner_model": {{ "summary": "改写后的一段话", "note": "新增…；删除…" }},
-  "strategy_model": {{ "summary": "改写后的一段话", "note": "新增…；删除…" }}
+  "teaching_adaptation_model": {{ "summary": "改写后的一段话", "note": "新增…；删除…" }}
 }}
 ```

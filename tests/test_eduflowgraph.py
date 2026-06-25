@@ -19,16 +19,23 @@ from EduFlowGraph.memory.concept_extractor import (
     is_banned_concept_name,
     sanitize_concept_payload,
 )
+from EduFlowGraph.memory import skill_pipeline
 from EduFlowGraph.memory.skill_pipeline import (
     HeuristicSkillDistiller,
     HeuristicSkillEvidenceExtractor,
+    coerce_skill_distillation_payload_from_llm,
     same_concept_family,
+    skill_matches_candidate,
+    skill_matches_evidence,
 )
+from EduFlowGraph.memory.retriever import MemoryRetriever
 from EduFlowGraph.prompts import (
     CONCEPT_EXTRACTION_PROMPT,
     EPISODE_DETECTION_PROMPT,
     EPISODE_EXTRACTION_PROMPT,
     RERANK_FALLBACK_PROMPT,
+    PROFILE_UPDATE_PROMPT,
+    PROFILE_CONDENSE_PROMPT,
     SKILL_DISTILLATION_PROMPT,
     SKILL_EVIDENCE_EXTRACTION_PROMPT,
     TUTOR_MEMORY_AUGMENTED_USER_PROMPT,
@@ -329,13 +336,38 @@ class ProfileStoreTest(unittest.TestCase):
             store.update_models(
                 {
                     "learner_model": {"summary": "已掌握PPO基础。", "note": "新增：PPO"},
-                    "strategy_model": {"summary": "分步讲解有效。", "note": "新增：分步讲解"},
+                    "teaching_adaptation_model": {
+                        "summary": "更适合先用低认知负荷的类比 Skill。",
+                        "note": "新增：Skill 适配偏好",
+                    },
                 }
             )
             snap = store.load()
             self.assertEqual(snap["models"]["learner_model"]["summary"], "已掌握PPO基础。")
-            self.assertEqual(snap["models"]["strategy_model"]["summary"], "分步讲解有效。")
+            self.assertEqual(
+                snap["models"]["teaching_adaptation_model"]["summary"],
+                "更适合先用低认知负荷的类比 Skill。",
+            )
             self.assertEqual(snap["revision_count"], 2)
+
+    def test_legacy_strategy_summary_is_not_carried_into_new_profile(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = LearnerProfileStore(Path(tmp))
+            normalized = store._normalize_snapshot(
+                {
+                    "models": {
+                        "learner_model": {"summary": "学习者摘要"},
+                        "strategy_model": {"summary": "旧教学程序"},
+                        "context_model": {"summary": "当前探索"},
+                    }
+                }
+            )
+
+            self.assertEqual(
+                normalized["models"]["teaching_adaptation_model"]["summary"],
+                "",
+            )
+            self.assertNotIn("strategy_model", normalized["models"])
 
     def test_recent_changes_bounded(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -386,7 +418,11 @@ class ProfileConsolidatorTest(unittest.TestCase):
             "outcome": {"status": "success", "evidence": "能自己复述"},
         }
         updates = consolidator.consolidate_episode(
-            current={"learner_model": "", "strategy_model": "", "context_model": ""},
+            current={
+                "learner_model": "",
+                "teaching_adaptation_model": "",
+                "context_model": "",
+            },
             episode=episode,
             concept_result={"concepts": [{"name": "贝叶斯定理"}]},
             skill_evidence={"teaching_actions": ["worked_example"]},
@@ -398,10 +434,20 @@ class ProfileConsolidatorTest(unittest.TestCase):
         self.assertNotIn("已建立较好理解", summary)
         self.assertNotIn("已掌握", summary)
         self.assertLessEqual(len(summary), model_budget("learner_model"))
-        # Strategy should be actionable, not just "worked well".
-        strat = updates.get("strategy_model", {}).get("summary", "")
-        self.assertTrue(strat)
-        self.assertIn("→", strat)
+        adaptation = updates.get("teaching_adaptation_model", {}).get("summary", "")
+        self.assertTrue(adaptation)
+        self.assertIn("Skill", adaptation)
+        self.assertIn("例题", adaptation)
+        self.assertNotIn("strategy_model", updates)
+        self.assertNotIn("贝叶斯定理如何", adaptation)
+
+    def test_profile_prompts_define_skill_selection_boundary(self):
+        self.assertIn("teaching_adaptation_model", PROFILE_UPDATE_PROMPT)
+        self.assertIn("Skill", PROFILE_UPDATE_PROMPT)
+        self.assertIn("不保存具体教学程序", PROFILE_UPDATE_PROMPT)
+        self.assertNotIn("strategy_model", PROFILE_UPDATE_PROMPT)
+        self.assertIn("teaching_adaptation_model", PROFILE_CONDENSE_PROMPT)
+        self.assertNotIn("strategy_model", PROFILE_CONDENSE_PROMPT)
 
     def test_context_mock_update(self):
         class _MockLLM:
@@ -456,28 +502,29 @@ class ProfileConsolidatorTest(unittest.TestCase):
         snapshot = {
             "models": {
                 "learner_model": {"summary": "理解PPO基础。"},
-                "strategy_model": {"summary": "分步讲解有效。"},
-                "context_model": {"summary": ""},
+                "teaching_adaptation_model": {"summary": "更适合先用直观类比。"},
+                "context_model": {"summary": "当前处于探索阶段。"},
             }
         }
         rendered = render_profile_context(snapshot)
         self.assertIn("长期学习者画像", rendered)
         self.assertIn("理解PPO基础", rendered)
-        self.assertIn("下一步教学策略", rendered)
-        # empty context model should not produce a section
-        self.assertNotIn("当前学习情境", rendered)
+        self.assertIn("当前学习情境", rendered)
+        self.assertIn("当前处于探索阶段", rendered)
+        self.assertNotIn("更适合先用直观类比", rendered)
+        self.assertNotIn("教学适配模型", rendered)
 
     def test_aggregator_summary(self):
         snapshot = {
             "models": {
                 "learner_model": {"summary": "理解PPO。", "revisions": 2},
-                "strategy_model": {"summary": "", "revisions": 0},
+                "teaching_adaptation_model": {"summary": "", "revisions": 0},
                 "context_model": {"summary": "练习阶段。", "revisions": 1},
             }
         }
         overview = summarize_profile(snapshot)
         self.assertTrue(overview["learner_model"]["has_content"])
-        self.assertFalse(overview["strategy_model"]["has_content"])
+        self.assertFalse(overview["teaching_adaptation_model"]["has_content"])
         self.assertEqual(overview["learner_model"]["revisions"], 2)
         self.assertTrue(profile_is_populated(snapshot))
         self.assertFalse(profile_is_populated({"models": {}}))
@@ -548,6 +595,13 @@ class ConceptExtractorTest(unittest.TestCase):
 
 
 class SkillPipelineTest(unittest.TestCase):
+    def _generalized_difficulty_helpers(self):
+        compatible = getattr(skill_pipeline, "difficulty_patterns_compatible", None)
+        normalized = getattr(skill_pipeline, "skill_difficulty_patterns", None)
+        self.assertIsNotNone(compatible)
+        self.assertIsNotNone(normalized)
+        return compatible, normalized
+
     def test_same_concept_family_bayes(self):
         self.assertTrue(same_concept_family(["Bayes theorem"], ["贝叶斯定理"]))
         self.assertTrue(same_concept_family(["Conditional probability"], ["条件概率"]))
@@ -580,6 +634,423 @@ class SkillPipelineTest(unittest.TestCase):
         self.assertIn("teaching_actions", evidence)
         self.assertIn("contrastive_explanation", evidence["teaching_actions"])
 
+    def test_distiller_builds_generic_skill_from_cross_concept_evidence(self):
+        episodes = [
+            {"episode_id": "ep_ellipse", "title": "椭圆面积推导"},
+            {"episode_id": "ep_ppo", "title": "PPO目标函数推导"},
+        ]
+        evidences = [
+            {
+                "episode_id": "ep_ellipse",
+                "concept_names": ["椭圆面积"],
+                "difficulty_pattern": "symbol_grounding",
+                "teaching_actions": [
+                    "formula_decomposition",
+                    "step_by_step_guidance",
+                    "diagnostic_check",
+                ],
+                "outcome": {"result": "success", "score": 0.84},
+                "evidence_summary": "拆解公式并逐步推导后，学生能独立解释各项。",
+            },
+            {
+                "episode_id": "ep_ppo",
+                "concept_names": ["PPO裁剪目标"],
+                "difficulty_pattern": "procedural_gap",
+                "teaching_actions": [
+                    "formula_decomposition",
+                    "step_by_step_guidance",
+                    "self_explanation_prompt",
+                ],
+                "outcome": {"result": "success", "score": 0.86},
+                "evidence_summary": "逐项解释并分步推导后，学生能复述目标函数。",
+            },
+        ]
+
+        distilled = HeuristicSkillDistiller().distill(episodes, evidences, {})
+
+        self.assertIsNotNone(distilled)
+        skill = distilled["skill"]
+        self.assertEqual(
+            {"symbol_grounding", "procedural_gap"},
+            set(skill["difficulty_patterns"]),
+        )
+        self.assertEqual(
+            ["formula_decomposition", "step_by_step_guidance"],
+            skill["teaching_actions"],
+        )
+        self.assertTrue(any("公式" in step or "项" in step for step in skill["procedure"]))
+        self.assertTrue(
+            any("步骤" in step or "一步" in step for step in skill["procedure"])
+        )
+        public_text = " ".join(
+            [
+                skill["name"],
+                skill["trigger"],
+                skill["embedding_text"],
+                *skill["procedure"],
+                *skill["success_criteria"],
+            ]
+        )
+        self.assertNotIn("椭圆", public_text)
+        self.assertNotIn("PPO", public_text)
+        self.assertNotIn("ep_ellipse", public_text)
+        self.assertNotIn("ep_ppo", public_text)
+        self.assertEqual(
+            {"椭圆面积", "PPO裁剪目标"},
+            set(skill["metadata"]["evidence_concept_scope"]),
+        )
+
+    def test_distiller_generalizes_concrete_examples_across_subjects(self):
+        episodes = [
+            {"episode_id": "ep_consensus", "title": "分布式共识"},
+            {"episode_id": "ep_law", "title": "法律概念边界"},
+        ]
+        evidences = [
+            {
+                "episode_id": "ep_consensus",
+                "concept_names": ["分布式共识"],
+                "difficulty_pattern": "abstraction_gap",
+                "teaching_actions": ["concrete_example", "self_explanation_prompt"],
+                "outcome": {"result": "partial_success", "score": 0.68},
+                "evidence_summary": "具体场景帮助学生初步理解抽象机制。",
+            },
+            {
+                "episode_id": "ep_law",
+                "concept_names": ["表见代理"],
+                "difficulty_pattern": "conceptual_confusion",
+                "teaching_actions": ["concrete_example", "self_explanation_prompt"],
+                "outcome": {"result": "success", "score": 0.82},
+                "evidence_summary": "生活化案例帮助学生说清概念边界。",
+            },
+        ]
+
+        skill = HeuristicSkillDistiller().distill(episodes, evidences, {})["skill"]
+
+        self.assertEqual(
+            {"abstraction_gap", "conceptual_confusion"},
+            set(skill["difficulty_patterns"]),
+        )
+        self.assertEqual(
+            ["concrete_example", "self_explanation_prompt"],
+            skill["teaching_actions"],
+        )
+        self.assertNotIn("分布式", skill["embedding_text"])
+        self.assertNotIn("表见代理", skill["embedding_text"])
+
+    def test_llm_distillation_cannot_specialize_public_skill_to_evidence_concepts(self):
+        episodes = [
+            {"episode_id": "ep_ellipse", "title": "椭圆面积推导"},
+            {"episode_id": "ep_ppo", "title": "PPO目标函数推导"},
+        ]
+        evidences = [
+            {
+                "episode_id": "ep_ellipse",
+                "concept_names": ["椭圆面积"],
+                "difficulty_pattern": "symbol_grounding",
+                "teaching_actions": ["formula_decomposition", "step_by_step_guidance"],
+                "outcome": {"result": "success", "score": 0.84},
+                "evidence_summary": "学生能解释公式项。",
+            },
+            {
+                "episode_id": "ep_ppo",
+                "concept_names": ["PPO裁剪目标"],
+                "difficulty_pattern": "procedural_gap",
+                "teaching_actions": ["formula_decomposition", "step_by_step_guidance"],
+                "outcome": {"result": "success", "score": 0.86},
+                "evidence_summary": "学生能复述推导步骤。",
+            },
+        ]
+        raw = json.dumps(
+            {
+                "should_create_skill": True,
+                "skill": {
+                    "name": "椭圆与PPO专用推导法",
+                    "trigger": "学习椭圆或PPO时使用。",
+                    "difficulty_pattern": "symbol_grounding",
+                    "difficulty_patterns": ["symbol_grounding"],
+                    "teaching_actions": [
+                        "formula_decomposition",
+                        "worked_example",
+                    ],
+                    "procedure": ["先写椭圆方程。", "再展开PPO目标函数。"],
+                    "success_criteria": ["学习者能算出椭圆面积。"],
+                    "embedding_text": "椭圆面积和PPO裁剪目标的专用教学方法。",
+                },
+                "edges": [],
+            },
+            ensure_ascii=False,
+        )
+
+        skill = coerce_skill_distillation_payload_from_llm(
+            raw, episodes, evidences, {}
+        )["skill"]
+
+        public_text = " ".join(
+            [
+                skill["name"],
+                skill["trigger"],
+                skill["embedding_text"],
+                *skill["procedure"],
+                *skill["success_criteria"],
+            ]
+        )
+        self.assertNotRegex(public_text, r"椭圆|PPO|ep_ellipse|ep_ppo")
+        self.assertEqual(
+            {"symbol_grounding", "procedural_gap"},
+            set(skill["difficulty_patterns"]),
+        )
+        self.assertEqual(
+            ["formula_decomposition", "step_by_step_guidance"],
+            skill["teaching_actions"],
+        )
+
+    def test_distiller_supports_other_generic_patterns_across_concepts(self):
+        episodes = [
+            {"episode_id": "ep_causality", "title": "因果方向"},
+            {"episode_id": "ep_dataflow", "title": "输入输出方向"},
+        ]
+        evidences = [
+            {
+                "episode_id": "ep_causality",
+                "concept_names": ["因果关系"],
+                "difficulty_pattern": "direction_confusion",
+                "teaching_actions": ["contrastive_explanation", "socratic_questioning"],
+                "outcome": {"result": "success", "score": 0.82},
+                "evidence_summary": "对比和追问后能说明因果方向。",
+            },
+            {
+                "episode_id": "ep_dataflow",
+                "concept_names": ["数据流"],
+                "difficulty_pattern": "direction_confusion",
+                "teaching_actions": ["contrastive_explanation", "socratic_questioning"],
+                "outcome": {"result": "partial_success", "score": 0.7},
+                "evidence_summary": "对比和追问后能区分输入输出。",
+            },
+        ]
+
+        skill = HeuristicSkillDistiller().distill(episodes, evidences, {})["skill"]
+
+        self.assertEqual(["direction_confusion"], skill["difficulty_patterns"])
+        self.assertEqual(
+            ["contrastive_explanation", "socratic_questioning"],
+            skill["teaching_actions"],
+        )
+        public_text = " ".join([skill["name"], skill["trigger"], skill["embedding_text"]])
+        self.assertNotRegex(public_text, r"因果关系|数据流")
+
+    def test_distiller_rejects_evidence_without_stable_core_action(self):
+        episodes = [
+            {"episode_id": "ep_a", "title": "主题甲"},
+            {"episode_id": "ep_b", "title": "主题乙"},
+        ]
+        evidences = [
+            {
+                "episode_id": "ep_a",
+                "concept_names": ["主题甲"],
+                "difficulty_pattern": "abstraction_gap",
+                "teaching_actions": ["concrete_example"],
+                "outcome": {"result": "success", "score": 0.8},
+            },
+            {
+                "episode_id": "ep_b",
+                "concept_names": ["主题乙"],
+                "difficulty_pattern": "conceptual_confusion",
+                "teaching_actions": ["contrastive_explanation"],
+                "outcome": {"result": "success", "score": 0.82},
+            },
+        ]
+
+        self.assertIsNone(HeuristicSkillDistiller().distill(episodes, evidences, {}))
+
+    def test_generalized_skill_id_is_stable_when_evidence_order_changes(self):
+        episodes = [
+            {"episode_id": "ep_symbol", "title": "形式化主题甲"},
+            {"episode_id": "ep_steps", "title": "形式化主题乙"},
+        ]
+        evidences = [
+            {
+                "episode_id": "ep_symbol",
+                "concept_names": ["形式化主题甲"],
+                "difficulty_pattern": "symbol_grounding",
+                "teaching_actions": ["formula_decomposition", "step_by_step_guidance"],
+                "outcome": {"result": "success", "score": 0.82},
+            },
+            {
+                "episode_id": "ep_steps",
+                "concept_names": ["形式化主题乙"],
+                "difficulty_pattern": "procedural_gap",
+                "teaching_actions": ["step_by_step_guidance", "formula_decomposition"],
+                "outcome": {"result": "success", "score": 0.84},
+            },
+        ]
+
+        forward = HeuristicSkillDistiller().distill(episodes, evidences, {})["skill"]
+        reverse = HeuristicSkillDistiller().distill(
+            list(reversed(episodes)), list(reversed(evidences)), {}
+        )["skill"]
+
+        self.assertEqual(forward["node_id"], reverse["node_id"])
+
+    def test_distiller_does_not_stitch_actions_without_repeated_cooccurrence(self):
+        episodes = [
+            {"episode_id": "ep_both", "title": "主题一"},
+            {"episode_id": "ep_formula", "title": "主题二"},
+            {"episode_id": "ep_steps", "title": "主题三"},
+        ]
+        evidences = [
+            {
+                "episode_id": "ep_both",
+                "concept_names": ["主题一"],
+                "difficulty_pattern": "symbol_grounding",
+                "teaching_actions": ["formula_decomposition", "step_by_step_guidance"],
+                "outcome": {"result": "success", "score": 0.82},
+            },
+            {
+                "episode_id": "ep_formula",
+                "concept_names": ["主题二"],
+                "difficulty_pattern": "symbol_grounding",
+                "teaching_actions": ["formula_decomposition"],
+                "outcome": {"result": "success", "score": 0.84},
+            },
+            {
+                "episode_id": "ep_steps",
+                "concept_names": ["主题三"],
+                "difficulty_pattern": "procedural_gap",
+                "teaching_actions": ["step_by_step_guidance"],
+                "outcome": {"result": "success", "score": 0.86},
+            },
+        ]
+
+        actions = HeuristicSkillDistiller().distill(episodes, evidences, {})["skill"][
+            "teaching_actions"
+        ]
+
+        self.assertEqual(1, len(actions))
+
+    def test_skill_matching_uses_learning_situation_not_concept_family(self):
+        difficulty_patterns_compatible, skill_difficulty_patterns = (
+            self._generalized_difficulty_helpers()
+        )
+        skill = {
+            "difficulty_pattern": "symbol_grounding",
+            "difficulty_patterns": ["symbol_grounding", "procedural_gap"],
+            "teaching_actions": ["formula_decomposition", "step_by_step_guidance"],
+            "metadata": {"evidence_concept_scope": ["椭圆面积", "PPO裁剪目标"]},
+        }
+        gravity_evidence = {
+            "difficulty_pattern": "procedural_gap",
+            "teaching_actions": ["formula_decomposition", "step_by_step_guidance"],
+            "concept_names": ["万有引力"],
+        }
+
+        self.assertTrue(skill_matches_evidence(skill, gravity_evidence))
+        self.assertTrue(
+            difficulty_patterns_compatible(
+                skill_difficulty_patterns(skill),
+                ["procedural_gap"],
+            )
+        )
+
+    def test_skill_matching_rejects_unrelated_difficulty_or_weak_actions(self):
+        skill = {
+            "difficulty_pattern": "symbol_grounding",
+            "difficulty_patterns": ["symbol_grounding", "procedural_gap"],
+            "teaching_actions": ["formula_decomposition", "step_by_step_guidance"],
+        }
+        unrelated = {
+            "difficulty_pattern": "direction_confusion",
+            "teaching_actions": ["formula_decomposition", "step_by_step_guidance"],
+            "concept_names": ["因果方向"],
+        }
+        weak_actions = {
+            "difficulty_pattern": "procedural_gap",
+            "teaching_actions": ["step_by_step_guidance", "worked_example"],
+            "concept_names": ["新主题"],
+        }
+
+        self.assertFalse(skill_matches_evidence(skill, unrelated))
+        self.assertFalse(skill_matches_evidence(skill, weak_actions))
+
+    def test_legacy_single_pattern_skill_matches_new_concept(self):
+        _, skill_difficulty_patterns = self._generalized_difficulty_helpers()
+        legacy_skill = {
+            "difficulty_pattern": "abstraction_gap",
+            "teaching_actions": ["concrete_example"],
+            "metadata": {"evidence_concept_scope": ["操作系统调度"]},
+        }
+        evidence = {
+            "difficulty_pattern": "abstraction_gap",
+            "teaching_actions": ["concrete_example"],
+            "concept_names": ["机会成本"],
+        }
+
+        self.assertEqual(["abstraction_gap"], skill_difficulty_patterns(legacy_skill))
+        self.assertTrue(skill_matches_evidence(legacy_skill, evidence))
+
+    def test_candidate_deduplication_is_concept_agnostic(self):
+        existing = {
+            "difficulty_pattern": "abstraction_gap",
+            "difficulty_patterns": ["abstraction_gap", "conceptual_confusion"],
+            "teaching_actions": ["concrete_example", "self_explanation_prompt"],
+            "metadata": {"evidence_concept_scope": ["分布式共识"]},
+        }
+        candidate = {
+            "difficulty_pattern": "conceptual_confusion",
+            "difficulty_patterns": ["conceptual_confusion"],
+            "teaching_actions": ["concrete_example", "self_explanation_prompt"],
+            "metadata": {"evidence_concept_scope": ["表见代理"]},
+        }
+
+        self.assertTrue(skill_matches_candidate(existing, candidate))
+
+    def test_pipeline_evidence_window_accepts_cross_concept_compatible_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            from EduFlowGraph.pipeline import TutorPipeline
+
+            pipeline = TutorPipeline(
+                load_settings_from_mapping({"data_dir": tmp, "provider": "mock"})
+            )
+            current = {
+                "episode_id": "ep_ppo",
+                "difficulty_pattern": "procedural_gap",
+                "teaching_actions": ["formula_decomposition", "step_by_step_guidance"],
+                "concept_names": ["PPO裁剪目标"],
+            }
+            ellipse = {
+                "episode_id": "ep_ellipse",
+                "difficulty_pattern": "symbol_grounding",
+                "teaching_actions": ["formula_decomposition", "step_by_step_guidance"],
+                "concept_names": ["椭圆面积"],
+            }
+            unrelated = {
+                "episode_id": "ep_direction",
+                "difficulty_pattern": "direction_confusion",
+                "teaching_actions": ["contrastive_explanation"],
+                "concept_names": ["条件概率"],
+            }
+
+            window = pipeline._build_evidence_window(
+                current,
+                [ellipse, unrelated, current],
+            )
+
+        self.assertEqual(["ep_ellipse", "ep_ppo"], [item["episode_id"] for item in window])
+
+    def test_retriever_matches_any_generalized_difficulty_pattern(self):
+        retriever = MemoryRetriever(graph=None)
+        skill = {
+            "difficulty_pattern": "symbol_grounding",
+            "difficulty_patterns": ["symbol_grounding", "procedural_gap"],
+        }
+
+        self.assertEqual(
+            0.18,
+            retriever._difficulty_match_bonus(
+                {"difficulty_hints": ["procedural_gap"]},
+                skill,
+            ),
+        )
+
 
 class BufferManagerTest(unittest.TestCase):
     def test_add_and_consume(self):
@@ -602,13 +1073,16 @@ class BufferManagerTest(unittest.TestCase):
 
 class ProfileDimensionsTest(unittest.TestCase):
     def test_three_models_defined(self):
-        self.assertEqual(len(MODEL_NAMES), 3)
-        self.assertIn("learner_model", MODEL_NAMES)
-        self.assertIn("strategy_model", MODEL_NAMES)
-        self.assertIn("context_model", MODEL_NAMES)
+        self.assertEqual(
+            MODEL_NAMES,
+            ("learner_model", "teaching_adaptation_model", "context_model"),
+        )
 
     def test_model_triggers(self):
-        self.assertEqual(set(EPISODE_MODELS), {"learner_model", "strategy_model"})
+        self.assertEqual(
+            set(EPISODE_MODELS),
+            {"learner_model", "teaching_adaptation_model"},
+        )
         self.assertEqual(TURN_MODEL, "context_model")
 
     def test_model_budgets(self):
@@ -618,6 +1092,45 @@ class ProfileDimensionsTest(unittest.TestCase):
 
 
 class PipelineIntegrationTest(unittest.TestCase):
+    @staticmethod
+    def _skill_candidate(skill_id: str = "skill_visual") -> dict:
+        return {
+            "id": skill_id,
+            "node": {
+                "skill_id": skill_id,
+                "node_id": skill_id,
+                "node_type": "skill",
+                "name": "直观类比引入",
+                "status": "active",
+                "trigger": "学习全新抽象概念时",
+                "difficulty_pattern": "abstraction_gap",
+                "teaching_actions": ["concrete_example"],
+                "procedure": ["先给生活化类比", "再映射到正式概念"],
+                "success_criteria": ["学生能复述核心思想"],
+                "quality": {"confidence": 0.86},
+            },
+            "base_raw_score": 0.9,
+            "episode_link_raw_score": 0.8,
+            "episode_evidence": ["类比后学生能够复述"],
+        }
+
+    @staticmethod
+    def _retrieval_context(candidates: list[dict]) -> dict:
+        return {
+            "concepts": [],
+            "episodes": [],
+            "skills": [],
+            "skill_candidates": candidates,
+            "retrieval_summary": {
+                "query_info": {"intent": "concept_explanation"},
+                "concept_hits": 0,
+                "episode_hits": 0,
+                "skill_hits": len(candidates),
+                "stale_vectors": 0,
+                "top_matches": {"concepts": [], "episodes": [], "skills": []},
+            },
+        }
+
     def test_pipeline_mock_chat(self):
         with tempfile.TemporaryDirectory() as tmp:
             settings = load_settings_from_mapping(
@@ -682,6 +1195,94 @@ class PipelineIntegrationTest(unittest.TestCase):
             pipeline.handle_user_message("s1", "test message")
             result = pipeline.reset_memory()
             self.assertIn("deleted", result)
+
+    def test_pipeline_personalizes_skill_candidates_without_prompting_full_adaptation(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            from EduFlowGraph.pipeline import TutorPipeline
+
+            pipeline = TutorPipeline(
+                load_settings_from_mapping({"data_dir": tmp, "provider": "mock"})
+            )
+            pipeline.profile_store.update_models(
+                {
+                    "context_model": {
+                        "summary": "当前处于探索阶段。",
+                        "note": "更新情境",
+                    },
+                    "teaching_adaptation_model": {
+                        "summary": "优先选择低认知负荷的类比 Skill。避免一开始堆叠公式。",
+                        "note": "新增适配偏好",
+                    },
+                }
+            )
+            pipeline.retriever.retrieve = lambda query: self._retrieval_context(  # type: ignore[method-assign]
+                [self._skill_candidate()]
+            )
+
+            turn = pipeline._start_tutor_turn(
+                "session_adaptation",
+                "请解释一个新概念",
+                memory_mode="memory_augmented",
+            )
+            context = turn["context"]
+
+            self.assertEqual(context["skills"][0]["node_id"], "skill_visual")
+            self.assertEqual(context["skill_selection"]["selected_count"], 1)
+            self.assertNotIn("优先选择低认知负荷", context["profile_context"])
+            self.assertNotIn("避免一开始堆叠公式", context["memory_context_pack"])
+            self.assertIn("先给生活化类比", context["memory_context_pack"])
+
+    def test_pipeline_without_skill_injects_only_one_short_fallback_sentence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            from EduFlowGraph.pipeline import TutorPipeline
+
+            pipeline = TutorPipeline(
+                load_settings_from_mapping({"data_dir": tmp, "provider": "mock"})
+            )
+            pipeline.profile_store.update_model(
+                "teaching_adaptation_model",
+                "先用直观类比建立理解。随后逐步进入形式化推导。",
+                note="新增适配偏好",
+            )
+            pipeline.retriever.retrieve = lambda query: self._retrieval_context([])  # type: ignore[method-assign]
+
+            turn = pipeline._start_tutor_turn(
+                "session_fallback",
+                "请解释一个新概念",
+                memory_mode="memory_augmented",
+            )
+            context = turn["context"]
+
+            self.assertEqual(context["skills"], [])
+            self.assertEqual(
+                context["skill_selection"]["fallback_instruction"],
+                "先用直观类比建立理解。",
+            )
+            self.assertIn("先用直观类比建立理解。", context["memory_context_pack"])
+            self.assertNotIn("随后逐步进入形式化推导", context["memory_context_pack"])
+
+    def test_pipeline_reranker_failure_uses_strong_degraded_skill(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            from EduFlowGraph.pipeline import TutorPipeline
+
+            pipeline = TutorPipeline(
+                load_settings_from_mapping({"data_dir": tmp, "provider": "mock"})
+            )
+            pipeline.retriever.retrieve = lambda query: self._retrieval_context(  # type: ignore[method-assign]
+                [self._skill_candidate("skill_degraded")]
+            )
+            pipeline.skill_reranker.rerank_fn = (  # type: ignore[attr-defined]
+                lambda query, documents, kind: (_ for _ in ()).throw(TimeoutError("timeout"))
+            )
+
+            context = pipeline._start_tutor_turn(
+                "session_degraded",
+                "请解释一个新概念",
+                memory_mode="memory_augmented",
+            )["context"]
+
+            self.assertEqual(context["skills"][0]["node_id"], "skill_degraded")
+            self.assertEqual(context["skill_selection"]["reranker_status"], "degraded")
 
 
 try:

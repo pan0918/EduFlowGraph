@@ -2,6 +2,6 @@
 
 Models:
   - learner_model:  Long-term stable cognitive portrait (hedged, evidence-tiered)
-  - strategy_model: Actionable next-turn teaching rules (when → do → check)
+  - teaching_adaptation_model: Text evidence for Skill selection and filtering
   - context_model:  Current task, phase, and emotion only (no cognitive diagnosis)
 """

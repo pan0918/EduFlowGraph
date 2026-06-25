@@ -36,8 +36,9 @@ test("memory workspace does not own the learner profile panel", () => {
 
 test("profile workspace uses three-model profile system", () => {
   assert.match(profileWorkspaceSource, /learner_model/);
-  assert.match(profileWorkspaceSource, /strategy_model/);
+  assert.match(profileWorkspaceSource, /teaching_adaptation_model/);
   assert.match(profileWorkspaceSource, /context_model/);
+  assert.doesNotMatch(profileWorkspaceSource, /strategy_model/);
 });
 
 test("profile workspace renders lightweight summary + recent changes", () => {

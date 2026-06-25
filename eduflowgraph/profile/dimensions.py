@@ -5,7 +5,7 @@ short paragraph (a "memory note") that gets rewritten over time rather than a
 growing list of evidence items.
 
 1. learner_model  — Student's cognitive state (diagnosis)
-2. strategy_model — What teaching approaches work for this learner (prescription)
+2. teaching_adaptation_model — Which teaching Skills fit this learner
 3. context_model  — Current learning situation (scene adaptation)
 """
 from __future__ import annotations
@@ -18,10 +18,10 @@ PROFILE_MODELS = {
         "icon": "brain",
         "budget": 300,
     },
-    "strategy_model": {
-        "label": "教学策略模型",
-        "subtitle": "下一步教学 — 条件规则驱动具体动作",
-        "description": "可执行的“当…→优先…→然后…”规则，指导下一轮该怎么教、如何验证，而非仅记录某方法有效。",
+    "teaching_adaptation_model": {
+        "label": "教学适配模型",
+        "subtitle": "Skill 选择 — 个性化重排与过滤依据",
+        "description": "描述更适合或应避免的 Skill 类型、认知负荷、教学节奏与验证偏好，不保存具体教学程序。",
         "icon": "compass",
         "budget": 300,
     },
@@ -37,7 +37,7 @@ PROFILE_MODELS = {
 MODEL_NAMES = tuple(PROFILE_MODELS.keys())
 
 # Models consolidated at episode boundaries (deep, stable signals).
-EPISODE_MODELS = ("learner_model", "strategy_model")
+EPISODE_MODELS = ("learner_model", "teaching_adaptation_model")
 # Model refreshed lightly on every turn (time-sensitive situation).
 TURN_MODEL = "context_model"
 

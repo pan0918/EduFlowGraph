@@ -80,7 +80,7 @@ const EMPTY_SNAPSHOT: DashboardSnapshot = {
   profile: {
     models: {
       learner_model: { summary: "", updated_at: null, revisions: 0 },
-      strategy_model: { summary: "", updated_at: null, revisions: 0 },
+      teaching_adaptation_model: { summary: "", updated_at: null, revisions: 0 },
       context_model: { summary: "", updated_at: null, revisions: 0 },
     },
     recent_changes: [],

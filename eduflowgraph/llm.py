@@ -1,4 +1,5 @@
 import json
+import math
 import time
 from typing import Any
 from urllib import error, request
@@ -212,7 +213,7 @@ class LLMClient:
             raise ValueError("Embedding response field data[0].embedding is not a list")
         return [float(item) for item in vector]
 
-    def _extract_rerank_order(
+    def _extract_rerank_results(
         self,
         data: dict[str, Any],
         documents: list[dict[str, Any]],
@@ -221,7 +222,7 @@ class LLMClient:
         if not isinstance(results, list):
             raise ValueError("Rerank response does not contain a results list")
         ranked: list[dict[str, Any]] = []
-        for item in results:
+        for rank, item in enumerate(results):
             if not isinstance(item, dict):
                 continue
             index_value = item.get("index", item.get("document_index"))
@@ -230,7 +231,24 @@ class LLMClient:
             except (TypeError, ValueError):
                 continue
             if 0 <= index < len(documents):
-                ranked.append(documents[index])
+                score_value = item.get("relevance_score", item.get("score"))
+                relevance_score: float | None = None
+                if score_value is not None:
+                    try:
+                        relevance_score = float(score_value)
+                    except (TypeError, ValueError) as exc:
+                        raise ValueError("Rerank relevance score is not numeric") from exc
+                    if not math.isfinite(relevance_score):
+                        raise ValueError("Rerank relevance score must be finite")
+                candidate = dict(documents[index])
+                candidate["rerank"] = {
+                    "rank": rank,
+                    "relevance_score": relevance_score,
+                    "provider": self.reranker_provider,
+                    "model_id": self.reranker_model_id,
+                    "source": "reranker" if relevance_score is not None else "rank_only",
+                }
+                ranked.append(candidate)
         if not ranked:
             raise ValueError("Rerank response results did not include usable indexes")
         return ranked
@@ -531,6 +549,7 @@ class LLMClient:
         documents: list[dict[str, Any]],
         *,
         kind: str,
+        allow_llm_fallback: bool = True,
     ) -> list[dict[str, Any]]:
         if not documents:
             return []
@@ -544,9 +563,12 @@ class LLMClient:
                     extra_headers=self.reranker_extra_headers,
                     api_version=self.reranker_api_version,
                 )
-                return self._extract_rerank_order(data, documents)
+                return self._extract_rerank_results(data, documents)
             except Exception:
-                pass
+                if not allow_llm_fallback:
+                    return []
+        if not allow_llm_fallback and self.reranker_provider != "mock":
+            return []
         return self.rerank_with_llm_fallback(query, documents, kind=kind)
 
     def rerank_with_llm_fallback(

@@ -59,10 +59,11 @@ export interface SkillNode {
   node_id: string;
   node_type: "skill";
   name: string;
-  status: "candidate" | "active";
+  status: "seed" | "candidate" | "active";
   trigger: string;
   concept_scope?: string[];
   difficulty_pattern: string;
+  difficulty_patterns?: string[];
   teaching_actions?: string[];
   procedure?: string[];
   success_criteria?: string[];
@@ -83,7 +84,10 @@ export interface SkillNode {
   };
 }
 
-export type ProfileModelName = "learner_model" | "strategy_model" | "context_model";
+export type ProfileModelName =
+  | "learner_model"
+  | "teaching_adaptation_model"
+  | "context_model";
 
 export interface ProfileModelEntry {
   summary: string;
@@ -100,7 +104,7 @@ export interface ProfileChange {
 export interface LearnerProfileSnapshot {
   models: {
     learner_model: ProfileModelEntry;
-    strategy_model: ProfileModelEntry;
+    teaching_adaptation_model: ProfileModelEntry;
     context_model: ProfileModelEntry;
   };
   recent_changes: ProfileChange[];
@@ -174,6 +178,25 @@ export interface RetrievedContext {
   skills: SkillNode[];
   profile?: LearnerProfileSnapshot;
   profile_context?: string;
+  skill_selection?: {
+    candidate_count: number;
+    selected_count: number;
+    reranker_status: "ok" | "rank_only" | "degraded" | "skipped";
+    fallback_instruction: string;
+    candidates: Array<{
+      skill_id: string;
+      status: string;
+      base_skill_score: number;
+      episode_link_score: number;
+      skill_confidence: number;
+      personal_fit_score: number;
+      final_skill_score: number;
+      rerank_rank?: number | null;
+      rerank_source: string;
+      selected: boolean;
+      filter_reason: string;
+    }>;
+  };
   retrieval_summary?: {
     stale_vectors?: number;
     concept_hits?: number;

@@ -15,7 +15,7 @@ situational state** — nothing else:
 
 - Knowledge gaps, misconceptions, cognitive patterns, reasoning habits
 - "已掌握/未掌握" judgments, mastery level, ability assessment
-- Teaching strategy recommendations ("应该换种讲法" belongs in strategy_model)
+- Skill selection preferences ("应该换种讲法" belongs in teaching_adaptation_model)
 - Long-term learner traits
 
 If the latest turn only reveals cognitive content with no situational change, return the

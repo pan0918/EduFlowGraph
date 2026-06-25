@@ -1,19 +1,21 @@
 import type { ProfileModelName, RetrievedContext } from "@/lib/types";
 import { formatSkillDisplay } from "@/lib/skill-display";
 
-const MODEL_LABELS: Record<ProfileModelName, string> = {
+const MODEL_LABELS: Partial<Record<ProfileModelName, string>> = {
   learner_model: "长期学习者画像",
-  strategy_model: "下一步教学策略",
   context_model: "当前学习情境",
 };
 
 const MODEL_ORDER: ProfileModelName[] = [
   "learner_model",
-  "strategy_model",
   "context_model",
 ];
 
 export function ContextRail({ context }: { context: RetrievedContext | null }) {
+  const adaptationSummary =
+    context?.profile?.models.teaching_adaptation_model?.summary?.trim() ?? "";
+  const skillSelection = context?.skill_selection;
+
   return (
     <aside className="w-full shrink-0 space-y-4 border-t border-[var(--border)] pt-6 xl:max-w-[360px] xl:border-l xl:border-t-0 xl:pl-6 xl:pt-0">
       <div>
@@ -52,6 +54,34 @@ export function ContextRail({ context }: { context: RetrievedContext | null }) {
               );
             })}
           </div>
+        </div>
+      ) : null}
+      {adaptationSummary || skillSelection ? (
+        <div className="surface-card p-4">
+          <div className="text-xs uppercase tracking-[0.18em] text-[var(--muted-foreground)]">
+            Skill 适配依据
+          </div>
+          <p className="mt-2 text-xs leading-5 text-[var(--muted-foreground)]">
+            该段画像仅参与 Skill 重排与过滤，不会作为完整文本注入 Tutor Prompt。
+          </p>
+          {adaptationSummary ? (
+            <div className="mt-3 rounded-2xl border border-sky-100 bg-sky-50/60 p-3 text-sm leading-6 text-[var(--foreground)]">
+              {adaptationSummary}
+            </div>
+          ) : null}
+          {skillSelection ? (
+            <div className="mt-3 flex flex-wrap gap-2 text-[11px] text-[var(--muted-foreground)]">
+              <span className="rounded-full bg-[var(--secondary)] px-2.5 py-1">
+                ReRank {skillSelection.reranker_status}
+              </span>
+              <span className="rounded-full bg-[var(--secondary)] px-2.5 py-1">
+                候选 {skillSelection.candidate_count}
+              </span>
+              <span className="rounded-full bg-[var(--secondary)] px-2.5 py-1">
+                入选 {skillSelection.selected_count}
+              </span>
+            </div>
+          ) : null}
         </div>
       ) : null}
       {context?.concepts.map((concept) => (

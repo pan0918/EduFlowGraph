@@ -3,7 +3,11 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Any, Callable
 
-from ..memory.skill_pipeline import skill_evidence_concept_scope
+from ..memory.skill_pipeline import (
+    difficulty_patterns_compatible,
+    skill_difficulty_patterns,
+    skill_evidence_concept_scope,
+)
 
 
 class MemoryRetriever:
@@ -24,7 +28,7 @@ class MemoryRetriever:
         query: str,
         top_k_episodes: int = 3,
         top_k_concepts: int = 3,
-        top_k_skills: int = 1,
+        top_k_skills: int = 12,
     ) -> dict[str, Any]:
         query_info = self._understand_query(query)
         query_embedding, embedding_error = self._query_embedding(query)
@@ -53,9 +57,8 @@ class MemoryRetriever:
             query_embedding,
             ranked_concepts,
             episode_candidates[:top_k_episodes],
-            top_k_skills=top_k_skills,
         )
-        ranked_skills = [item["node"] for item in skill_candidates[:top_k_skills]]
+        visible_skill_candidates = skill_candidates[:top_k_skills]
 
         retrieval_summary = {
             "query_info": query_info,
@@ -69,21 +72,22 @@ class MemoryRetriever:
             "top_matches": {
                 "concepts": [self._candidate_summary(item) for item in concept_candidates[:top_k_concepts]],
                 "episodes": [self._candidate_summary(item) for item in episode_candidates[:top_k_episodes]],
-                "skills": [self._candidate_summary(item) for item in skill_candidates[:top_k_skills]],
+                "skills": [self._candidate_summary(item) for item in visible_skill_candidates],
             },
         }
         memory_context_pack = self.render_context(
             {
                 "concepts": ranked_concepts,
                 "episodes": ranked_episodes,
-                "skills": ranked_skills,
+                "skills": [],
                 "retrieval_summary": retrieval_summary,
             }
         )
         return {
             "concepts": ranked_concepts,
             "episodes": ranked_episodes,
-            "skills": ranked_skills,
+            "skills": [],
+            "skill_candidates": visible_skill_candidates,
             "retrieval_summary": retrieval_summary,
             "memory_context_pack": memory_context_pack,
         }
@@ -118,6 +122,11 @@ class MemoryRetriever:
                 "id": concept["node_id"],
                 "node": concept,
                 "score": score,
+                "base_raw_score": score,
+                "episode_link_raw_score": episode_scores[source] * edge_weight,
+                "episode_evidence": [str(edge.get("evidence", ""))]
+                if str(edge.get("evidence", "")).strip()
+                else [],
                 "text": self._retrieval_text(concept),
                 "reason": "episode_backfill",
                 "stale": False,
@@ -358,8 +367,6 @@ class MemoryRetriever:
         query_embedding: list[float],
         concepts: list[dict[str, Any]],
         episode_candidates: list[dict[str, Any]],
-        *,
-        top_k_skills: int,
     ) -> tuple[list[dict[str, Any]], dict[str, int]]:
         by_skill: dict[str, dict[str, Any]] = {}
         stale_vectors = 0
@@ -415,14 +422,14 @@ class MemoryRetriever:
                     skill,
                     match_reasons=match_reasons,
                     matched_concepts=skill_evidence_concept_scope(skill)[:3],
-                    matched_difficulty=[str(skill.get("difficulty_pattern", ""))] if str(skill.get("difficulty_pattern", "")) else [],
+                    matched_difficulty=skill_difficulty_patterns(skill),
                     intent=str(query_info.get("intent", "")),
                 ),
                 "reason": "episode_skill_expansion",
                 "stale": stale,
                 "match_reasons": match_reasons,
                 "matched_concepts": skill_evidence_concept_scope(skill)[:3],
-                "matched_difficulty": [str(skill.get("difficulty_pattern", ""))] if str(skill.get("difficulty_pattern", "")) else [],
+                "matched_difficulty": skill_difficulty_patterns(skill),
                 "intent": str(query_info.get("intent", "")),
             }
             if existing is None or payload["score"] > existing["score"]:
@@ -465,24 +472,30 @@ class MemoryRetriever:
                     "id": skill["node_id"],
                     "node": skill,
                     "score": score,
+                    "base_raw_score": score,
+                    "episode_link_raw_score": float(
+                        (existing or {}).get("episode_link_raw_score", 0.0)
+                    ),
+                    "episode_evidence": list(
+                        (existing or {}).get("episode_evidence", [])
+                    ),
                     "text": self._rerank_text(
                         skill,
                         match_reasons=match_reasons,
                         matched_concepts=skill_evidence_concept_scope(skill)[:3],
-                        matched_difficulty=[str(skill.get("difficulty_pattern", ""))] if str(skill.get("difficulty_pattern", "")) else [],
+                        matched_difficulty=skill_difficulty_patterns(skill),
                         intent=str(query_info.get("intent", "")),
                     ),
                     "reason": "direct_skill_match",
                     "stale": stale,
                     "match_reasons": match_reasons,
                     "matched_concepts": skill_evidence_concept_scope(skill)[:3],
-                    "matched_difficulty": [str(skill.get("difficulty_pattern", ""))] if str(skill.get("difficulty_pattern", "")) else [],
+                    "matched_difficulty": skill_difficulty_patterns(skill),
                     "intent": str(query_info.get("intent", "")),
                 }
 
         candidates = list(by_skill.values())
         candidates.sort(key=lambda item: item["score"], reverse=True)
-        candidates = self._maybe_rerank(query, candidates, "skill")
         return candidates, {"stale_vectors": stale_vectors}
 
     def _maybe_rerank(
@@ -570,7 +583,6 @@ class MemoryRetriever:
         concepts = context.get("concepts", [])
         episodes = context.get("episodes", [])
         skills = context.get("skills", [])
-        query_info = context.get("retrieval_summary", {}).get("query_info", {})
         lines = ["[Memory Context]", ""]
         profile_block = context.get("profile_context")
         if not profile_block and isinstance(context.get("profile"), dict):
@@ -607,18 +619,27 @@ class MemoryRetriever:
             lines.append("- None")
 
         lines.append("")
-        lines.append("Recommended pedagogical skill:")
+        lines.append("Selected pedagogical skills:")
         if skills:
-            skill = skills[0]
-            lines.append(f"- {skill.get('name', 'Untitled skill')}")
-            for step in list(skill.get("procedure", []))[:3]:
-                lines.append(f"  {step}")
+            for skill in skills[:4]:
+                lines.append(f"- {skill.get('name', 'Untitled skill')}")
+                trigger = str(skill.get("trigger", "")).strip()
+                if trigger:
+                    lines.append(f"  Trigger: {trigger}")
+                for step in list(skill.get("procedure", []))[:3]:
+                    lines.append(f"  Procedure: {step}")
+                criteria = list(skill.get("success_criteria", []))
+                if criteria:
+                    lines.append(f"  Check: {criteria[0]}")
         else:
-            lines.append("- No reusable pedagogical skill retrieved.")
-
-        lines.append("")
-        lines.append("Teaching instruction:")
-        lines.append(self._teaching_instruction(concepts, episodes, skills, query_info))
+            lines.append("- None selected.")
+            fallback = str(
+                context.get("skill_selection", {}).get("fallback_instruction", "")
+            ).strip()
+            if fallback:
+                lines.append("")
+                lines.append("Teaching control fallback:")
+                lines.append(f"- {fallback}")
         return "\n".join(lines)
 
     def _learner_history_lines(self, episodes: list[dict[str, Any]]) -> list[str]:
@@ -663,87 +684,14 @@ class MemoryRetriever:
                     lines.append(detected)
         return lines[:3]
 
-    def _teaching_instruction(
-        self,
-        concepts: list[dict[str, Any]],
-        episodes: list[dict[str, Any]],
-        skills: list[dict[str, Any]],
-        query_info: dict[str, Any],
-    ) -> str:
-        concept_names = ", ".join(concept.get("name", "") for concept in concepts[:2] if concept.get("name"))
-        intent = str(query_info.get("intent", "concept_explanation"))
-        learner_signal = str(query_info.get("learner_signal", "neutral"))
-        if skills:
-            skill = skills[0]
-            procedure = list(skill.get("procedure", []))
-            actions = set(skill.get("teaching_actions", []))
-            first_steps = "; ".join(procedure[:2])
-            if intent == "assessment":
-                return (
-                    f"Start from {concept_names or 'the current concept focus'}, run a short check before re-teaching, "
-                    f"use {first_steps} only if the learner misses the key distinction, and finish with one transfer check."
-                )
-            if intent == "comparison":
-                return (
-                    f"Start from {concept_names or 'the current concept focus'}, explicitly compare the two easily confused ideas side by side, "
-                    f"use {first_steps}, say what each side means in the same scenario, and ask the learner to compare them back in one sentence."
-                )
-            if intent in {"worked_example", "formula_grounding"}:
-                if "concrete_example" in actions:
-                    return (
-                        f"Start from {concept_names or 'the current concept focus'}, begin with a small worked example before definitions or formulas, "
-                        f"use {first_steps}, map each symbol back to the example, and only then summarize the rule."
-                    )
-                return (
-                    f"Start from {concept_names or 'the current concept focus'}, begin with one concrete worked example, "
-                    f"use {first_steps}, and connect each step back to the formula meaning before abstracting."
-                )
-            if learner_signal == "still_confused" and intent == "re_explanation":
-                if "concrete_example" in actions:
-                    return (
-                        f"Start from {concept_names or 'the current concept focus'}, switch to a different explanation path than before, "
-                        f"use {first_steps}, then use a small numeric example and ask the learner to restate the difference in their own words."
-                    )
-                return (
-                    f"Start from {concept_names or 'the current concept focus'}, switch to a different explanation path than before, "
-                    f"use {first_steps}, and ask the learner to restate the difference in their own words before moving on."
-                )
-            example_hint = (
-                " Use a small numeric example before checking understanding."
-                if "concrete_example" in actions
-                else " Ask the learner to restate the difference after the explanation."
-            )
-            return (
-                f"Start from {concept_names or 'the current concept focus'}, follow the retrieved skill trigger "
-                f"({skill.get('difficulty_pattern', 'unknown')}), use {first_steps}, avoid jumping straight to the final formula or answer,"
-                f"{example_hint}"
-            )
-        if episodes:
-            if intent == "comparison":
-                return (
-                    f"Start from {concept_names or 'the current concept focus'}, compare the two confusing ideas side by side, "
-                    "reuse the clearer contrast pattern from the retrieved episodes, and finish by asking the learner to state the difference back."
-                )
-            if intent in {"worked_example", "formula_grounding"}:
-                return (
-                    f"Start from {concept_names or 'the current concept focus'}, begin with one concrete example before abstract definitions, "
-                    "reuse the clearer explanation path from the retrieved episodes, and connect the example back to each formula part."
-                )
-            return (
-                f"Start from {concept_names or 'the current concept focus'}, reuse the more effective explanation path from the retrieved episodes, "
-                "avoid jumping directly to the final formula, and end with a short understanding check."
-            )
-        if intent == "comparison":
-            return "Compare the two target ideas side by side, keep the contrast explicit, and end by asking the learner to state the difference back."
-        if intent in {"worked_example", "formula_grounding"}:
-            return "Start with one small worked example, then connect each step or symbol back to the concept before summarizing the rule."
-        return "Explain the concept progressively, keep the answer short, and end with a short understanding check."
-
     def _difficulty_match_bonus(self, query_info: dict[str, Any], skill: dict[str, Any]) -> float:
         hints = set(query_info.get("difficulty_hints", []))
         if not hints:
             return 0.0
-        return 0.18 if str(skill.get("difficulty_pattern", "")) in hints else 0.0
+        return 0.18 if difficulty_patterns_compatible(
+            skill_difficulty_patterns(skill),
+            list(hints),
+        ) else 0.0
 
     def _skill_intent_bonus(self, query_info: dict[str, Any], skill: dict[str, Any]) -> float:
         intent = str(query_info.get("intent", "concept_explanation"))
@@ -771,7 +719,7 @@ class MemoryRetriever:
             for item in skill_evidence_concept_scope(skill)
             if str(item).strip()
         }
-        return 0.08 if scope.intersection(concept_names) else 0.0
+        return 0.03 if scope.intersection(concept_names) else 0.0
 
     def _skill_quality_bonus(self, skill: dict[str, Any]) -> float:
         quality = skill.get("quality", {})
@@ -927,8 +875,7 @@ class MemoryRetriever:
             [
                 str(skill.get("name", "")),
                 str(skill.get("trigger", "")),
-                str(skill.get("difficulty_pattern", "")),
-                *skill_evidence_concept_scope(skill),
+                *skill_difficulty_patterns(skill),
                 *[str(item) for item in skill.get("teaching_actions", [])],
                 str(retrieval.get("embedding_text", "")),
                 *[str(item) for item in retrieval.get("keywords", [])],

@@ -31,6 +31,7 @@ from .memory.episode_extractor import (
     finalize_episode,
 )
 from .memory.retriever import MemoryRetriever
+from .memory.skill_reranker import SkillPersonalizedReranker
 from .memory.skill_pipeline import (
     HeuristicSkillDistiller,
     HeuristicSkillEvidenceExtractor,
@@ -38,10 +39,11 @@ from .memory.skill_pipeline import (
     apply_skill_validation_result,
     coerce_skill_distillation_payload_from_llm,
     coerce_skill_evidence_payload_from_llm,
+    difficulty_patterns_compatible,
+    evidence_difficulty_patterns,
     make_validation_edge,
     positive_outcome,
-    same_concept_family,
-    skill_evidence_concept_scope,
+    skill_difficulty_patterns,
     skill_matches_candidate,
     skill_matches_evidence,
 )
@@ -124,6 +126,14 @@ class TutorPipeline:
                 query, candidates, kind=kind
             ),
             embedding_signature=self._embedding_signature(),
+        )
+        self.skill_reranker = SkillPersonalizedReranker(
+            rerank_fn=lambda query, candidates, kind: self.llm.rerank(
+                query,
+                candidates,
+                kind=kind,
+                allow_llm_fallback=False,
+            )
         )
         self.profile_consolidator = ProfileConsolidator(self.llm)
         self.profile_store.migrate_legacy_if_needed()
@@ -296,7 +306,6 @@ class TutorPipeline:
         return self._make_retrieval_asset(embedding_text, keywords)
 
     def _build_skill_retrieval(self, skill: dict[str, Any]) -> dict[str, Any]:
-        evidence_scope = skill_evidence_concept_scope(skill)
         procedure = [
             str(item) for item in skill.get("procedure", []) if str(item).strip()
         ]
@@ -307,7 +316,7 @@ class TutorPipeline:
             [
                 f"Skill: {skill.get('name', '')}",
                 f"Trigger: {skill.get('trigger', '')}",
-                f"Difficulty pattern: {skill.get('difficulty_pattern', '')}",
+                "Difficulty patterns: " + ", ".join(skill_difficulty_patterns(skill)),
                 "Procedure: " + " ".join(procedure[:3]) if procedure else "",
                 "Success criteria: " + " ".join(success_criteria[:2])
                 if success_criteria
@@ -316,13 +325,12 @@ class TutorPipeline:
         ).strip()
         keywords = [
             str(skill.get("name", "")).strip(),
-            str(skill.get("difficulty_pattern", "")).strip(),
+            *skill_difficulty_patterns(skill),
             *[
                 str(item)
                 for item in skill.get("teaching_actions", [])
                 if str(item).strip()
             ],
-            *evidence_scope,
         ]
         return self._make_retrieval_asset(
             embedding_text, [item for item in keywords if item]
@@ -678,18 +686,25 @@ class TutorPipeline:
         current: dict[str, Any],
         all_evidences: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
-        pattern = str(current.get("difficulty_pattern", "unknown"))
+        patterns = evidence_difficulty_patterns(current)
         actions = list(current.get("teaching_actions", []))
-        concepts = list(current.get("concept_names", []))
         window: list[dict[str, Any]] = []
+        seen_episode_ids: set[str] = set()
+        if not patterns or not actions:
+            return window
         for ev in reversed(all_evidences):
-            if ev.get("difficulty_pattern") != pattern:
+            episode_id = str(ev.get("episode_id", "")).strip()
+            if not episode_id or episode_id in seen_episode_ids:
                 continue
-            if not same_concept_family(concepts, list(ev.get("concept_names", []))):
+            if not difficulty_patterns_compatible(
+                patterns,
+                evidence_difficulty_patterns(ev),
+            ):
                 continue
             if actions and action_overlap(actions, list(ev.get("teaching_actions", []))) <= 0:
                 continue
             window.append(ev)
+            seen_episode_ids.add(episode_id)
             if len(window) == 4:
                 break
         return list(reversed(window))
@@ -798,7 +813,7 @@ class TutorPipeline:
         concept_result: dict[str, Any] | None,
         skill_evidence: dict[str, Any] | None,
     ) -> None:
-        """Rewrite learner_model + strategy_model paragraphs at episode boundaries."""
+        """Rewrite learner and teaching-adaptation paragraphs at episode boundaries."""
         try:
             current = self.profile_store.summaries()
             updates = self.profile_consolidator.consolidate_episode(
@@ -826,13 +841,25 @@ class TutorPipeline:
     def _apply_profile_retrieval(
         self, query: str, context: dict[str, Any]
     ) -> dict[str, Any]:
-        """Attach the lightweight profile paragraphs to the tutor context.
-
-        The profile is already tiny and consolidated, so it is injected directly —
-        no scoring or graph-rank fusion. The memory-graph retrieval stays untouched.
-        """
+        """Apply text-profile evidence to Skill selection and prompt-safe context."""
         fused = dict(context)
         profile_snapshot = self.profile_store.load()
+        models = profile_snapshot.get("models", {})
+        context_summary = str(
+            models.get("context_model", {}).get("summary", "")
+        ).strip()
+        adaptation_summary = str(
+            models.get("teaching_adaptation_model", {}).get("summary", "")
+        ).strip()
+        selection = self.skill_reranker.select(
+            query=query,
+            context_summary=context_summary,
+            adaptation_summary=adaptation_summary,
+            candidates=list(fused.get("skill_candidates", [])),
+        )
+        fused["skills"] = selection["skills"]
+        fused["skill_selection"] = selection["skill_selection"]
+        fused.pop("skill_candidates", None)
         fused["profile"] = profile_snapshot
         fused["profile_context"] = render_profile_context(profile_snapshot)
         fused["memory_context_pack"] = self.retriever.render_context(fused)

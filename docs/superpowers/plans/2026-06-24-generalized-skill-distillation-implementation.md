@@ -138,7 +138,7 @@ Expected: zero failures.
 
 - [ ] **Step 2: Run all web unit tests**
 
-Run: `npm --prefix web test`
+Run: `node --test web/lib/skill-display.test.mjs web/lib/latex.test.mjs web/components/workspace/chat-workspace-source.test.mjs web/components/workspace/memory-graph-layout.test.mjs web/components/workspace/chat-trace-utils.test.mjs web/components/workspace/skills-workspace-source.test.mjs web/components/workspace/profile-page-source.test.mjs web/components/providers/workspace-session-utils.test.mjs`
 
 Expected: zero failures.
 
@@ -157,4 +157,3 @@ Run a read-only SQLite `PRAGMA quick_check`, confirm schema version 2 and WAL mo
 Run: `git diff --check` and `git status --short`.
 
 Expected: no whitespace errors and only intended project changes remain alongside the pre-existing user changes.
-

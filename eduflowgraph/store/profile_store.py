@@ -10,7 +10,7 @@ Snapshot shape::
     {
       "models": {
         "learner_model":  {"summary": "...", "updated_at": "...", "revisions": 3},
-        "strategy_model": {"summary": "...", "updated_at": "...", "revisions": 2},
+        "teaching_adaptation_model": {"summary": "...", "updated_at": "...", "revisions": 2},
         "context_model":  {"summary": "...", "updated_at": "...", "revisions": 5}
       },
       "recent_changes": [{"at": "...", "model": "...", "note": "新增…；删除…"}],
