@@ -1,6 +1,6 @@
 """Lightweight learner profile store.
 
-The profile is three short paragraphs ("memory notes"), one per model. Each update
+The profile is two short paragraphs ("memory notes"), one per portrait. Each update
 *rewrites* the relevant paragraph (adding new content, removing stale content) instead
 of appending to an ever-growing evidence log. A small bounded change-log is kept purely
 for UI transparency.
@@ -10,7 +10,6 @@ Snapshot shape::
     {
       "models": {
         "learner_model":  {"summary": "...", "updated_at": "...", "revisions": 3},
-        "teaching_adaptation_model": {"summary": "...", "updated_at": "...", "revisions": 2},
         "context_model":  {"summary": "...", "updated_at": "...", "revisions": 5}
       },
       "recent_changes": [{"at": "...", "model": "...", "note": "新增…；删除…"}],
@@ -220,7 +219,7 @@ class LearnerProfileStore:
                 "note": str(c.get("note", "")),
             }
             for c in recent
-            if isinstance(c, dict)
+            if isinstance(c, dict) and c.get("model") in MODEL_NAMES
         ][:MAX_RECENT_CHANGES]
 
         health = payload.get("health")
@@ -231,6 +230,8 @@ class LearnerProfileStore:
             "models": models,
             "recent_changes": clean_recent,
             "updated_at": payload.get("updated_at"),
-            "revision_count": int(payload.get("revision_count", 0) or 0),
+            "revision_count": sum(
+                int(entry.get("revisions", 0) or 0) for entry in models.values()
+            ),
             "health": health,
         }

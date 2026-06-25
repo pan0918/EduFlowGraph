@@ -128,9 +128,10 @@ class WebAppApiTest(unittest.TestCase):
             self.assertEqual([], payload["memory_events"])
             self.assertEqual(0, payload["memory_flow_count"])
             self.assertEqual(
-                {"learner_model", "teaching_adaptation_model", "context_model"},
+                {"learner_model", "context_model"},
                 set(payload["profile"]["models"]),
             )
+            self.assertEqual("", payload["skill_adaptation"]["summary"])
             self.assertEqual(0, payload["profile"]["revision_count"])
             self.assertEqual("ok", payload["profile"]["health"]["status"])
             self.assertEqual("sqlite", payload["storage_health"]["backend"])

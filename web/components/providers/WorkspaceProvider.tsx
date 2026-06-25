@@ -80,12 +80,18 @@ const EMPTY_SNAPSHOT: DashboardSnapshot = {
   profile: {
     models: {
       learner_model: { summary: "", updated_at: null, revisions: 0 },
-      teaching_adaptation_model: { summary: "", updated_at: null, revisions: 0 },
       context_model: { summary: "", updated_at: null, revisions: 0 },
     },
     recent_changes: [],
     updated_at: null,
     revision_count: 0,
+    health: { status: "ok", message: "" },
+  },
+  skill_adaptation: {
+    summary: "",
+    updated_at: null,
+    revisions: 0,
+    recent_changes: [],
     health: { status: "ok", message: "" },
   },
   memory_flow_count: 0,

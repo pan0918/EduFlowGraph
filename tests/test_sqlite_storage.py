@@ -61,7 +61,7 @@ class SQLiteStorageContractTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             storage = SQLiteStorage(Path(tmp) / "eduflowgraph.db")
 
-            self.assertEqual(storage.schema_version(), 2)
+            self.assertEqual(storage.schema_version(), 3)
             self.assertEqual(storage.journal_mode(), "wal")
             self.assertEqual(storage.quick_check(), "ok")
             with storage.connect() as connection:
@@ -80,6 +80,8 @@ class SQLiteStorageContractTest(unittest.TestCase):
                     "edges",
                     "profile_models",
                     "profile_changes",
+                    "skill_adaptation",
+                    "skill_adaptation_changes",
                     "embeddings",
                 }.issubset(tables)
             )
@@ -116,11 +118,14 @@ class SQLiteStorageContractTest(unittest.TestCase):
                 ]
             self.assertEqual(
                 names,
-                ["context_model", "learner_model", "teaching_adaptation_model"],
+                ["context_model", "learner_model"],
             )
 
     def test_v1_profile_schema_migrates_without_carrying_legacy_strategy(self):
         from EduFlowGraph.store.sqlite_profile_store import SQLiteLearnerProfileStore
+        from EduFlowGraph.store.sqlite_skill_adaptation_store import (
+            SQLiteSkillAdaptationStore,
+        )
         from EduFlowGraph.store.sqlite_storage import SQLiteStorage
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -156,19 +161,66 @@ class SQLiteStorageContractTest(unittest.TestCase):
 
             storage = SQLiteStorage(database_path)
             profile = SQLiteLearnerProfileStore(storage).load()
+            skill_adaptation = SQLiteSkillAdaptationStore(storage).load()
 
-            self.assertEqual(storage.schema_version(), 2)
-            self.assertEqual(
-                set(profile["models"]),
-                {"learner_model", "teaching_adaptation_model", "context_model"},
-            )
+            self.assertEqual(storage.schema_version(), 3)
+            self.assertEqual(set(profile["models"]), {"learner_model", "context_model"})
             self.assertEqual(profile["models"]["learner_model"]["summary"], "保留学习者摘要")
             self.assertEqual(profile["models"]["context_model"]["summary"], "保留当前情境")
-            self.assertEqual(profile["models"]["teaching_adaptation_model"]["summary"], "")
+            self.assertEqual(skill_adaptation["summary"], "")
             self.assertEqual(
                 [change["model"] for change in profile["recent_changes"]],
                 ["context_model"],
             )
+
+    def test_v2_teaching_adaptation_migrates_to_skill_adaptation(self):
+        from EduFlowGraph.store.sqlite_profile_store import SQLiteLearnerProfileStore
+        from EduFlowGraph.store.sqlite_skill_adaptation_store import (
+            SQLiteSkillAdaptationStore,
+        )
+        from EduFlowGraph.store.sqlite_storage import SQLiteStorage
+
+        with tempfile.TemporaryDirectory() as tmp:
+            database_path = Path(tmp) / "eduflowgraph.db"
+            with sqlite3.connect(database_path) as connection:
+                connection.executescript(
+                    """
+                    CREATE TABLE profile_models (
+                        model_name TEXT PRIMARY KEY CHECK (
+                            model_name IN ('learner_model', 'teaching_adaptation_model', 'context_model')
+                        ),
+                        summary TEXT NOT NULL DEFAULT '',
+                        updated_at TEXT,
+                        revisions INTEGER NOT NULL DEFAULT 0
+                    );
+                    CREATE TABLE profile_changes (
+                        change_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        changed_at TEXT NOT NULL,
+                        model_name TEXT NOT NULL,
+                        note TEXT NOT NULL,
+                        FOREIGN KEY (model_name) REFERENCES profile_models(model_name)
+                    );
+                    INSERT INTO profile_models VALUES
+                        ('learner_model', '学习者摘要', '2026-06-24T16:40:00Z', 2),
+                        ('teaching_adaptation_model', '旧 Skill 适配证据', '2026-06-24T16:41:00Z', 3),
+                        ('context_model', '情境摘要', '2026-06-24T16:42:00Z', 1);
+                    INSERT INTO profile_changes(changed_at, model_name, note) VALUES
+                        ('2026-06-24T16:41:00Z', 'teaching_adaptation_model', '旧适配变更'),
+                        ('2026-06-24T16:42:00Z', 'context_model', '保留情境变更');
+                    PRAGMA user_version = 2;
+                    """
+                )
+
+            storage = SQLiteStorage(database_path)
+            profile = SQLiteLearnerProfileStore(storage).load()
+            skill_adaptation = SQLiteSkillAdaptationStore(storage).load()
+
+            self.assertEqual(storage.schema_version(), 3)
+            self.assertEqual(set(profile["models"]), {"learner_model", "context_model"})
+            self.assertEqual(skill_adaptation["summary"], "旧 Skill 适配证据")
+            self.assertEqual(skill_adaptation["updated_at"], "2026-06-24T16:41:00Z")
+            self.assertEqual(skill_adaptation["revisions"], 3)
+            self.assertEqual(skill_adaptation["recent_changes"][0]["note"], "旧适配变更")
 
 
 class SQLiteCodecTest(unittest.TestCase):
@@ -413,10 +465,7 @@ class SQLiteProfileStoreTest(unittest.TestCase):
 
     def test_profile_shape_updates_and_clear_match_current_contract(self):
         empty = self.profile.load()
-        self.assertEqual(
-            set(empty["models"]),
-            {"learner_model", "teaching_adaptation_model", "context_model"},
-        )
+        self.assertEqual(set(empty["models"]), {"learner_model", "context_model"})
         self.assertEqual(empty["revision_count"], 0)
 
         updated = self.profile.update_models({
@@ -433,6 +482,41 @@ class SQLiteProfileStoreTest(unittest.TestCase):
         self.assertEqual(cleared["revision_count"], 0)
         self.assertEqual(cleared["recent_changes"], [])
         self.assertTrue(self.profile.is_empty())
+
+
+class SQLiteSkillAdaptationStoreTest(unittest.TestCase):
+    def setUp(self):
+        from EduFlowGraph.store.sqlite_skill_adaptation_store import (
+            SQLiteSkillAdaptationStore,
+        )
+        from EduFlowGraph.store.sqlite_storage import SQLiteStorage
+
+        self.tmp = tempfile.TemporaryDirectory()
+        self.storage = SQLiteStorage(Path(self.tmp.name) / "eduflowgraph.db")
+        self.skill_adaptation = SQLiteSkillAdaptationStore(self.storage)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_skill_adaptation_shape_updates_and_clear(self):
+        empty = self.skill_adaptation.load()
+        self.assertEqual(empty["summary"], "")
+        self.assertEqual(empty["revisions"], 0)
+
+        updated = self.skill_adaptation.update(
+            "优先选择低认知负荷 Skill。",
+            note="新增适配证据",
+        )
+        self.assertEqual(updated["summary"], "优先选择低认知负荷 Skill。")
+        self.assertEqual(updated["revisions"], 1)
+        self.assertEqual(updated["recent_changes"][0]["note"], "新增适配证据")
+        self.assertFalse(self.skill_adaptation.is_empty())
+
+        self.skill_adaptation.clear()
+        cleared = self.skill_adaptation.load()
+        self.assertEqual(cleared["summary"], "")
+        self.assertEqual(cleared["recent_changes"], [])
+        self.assertTrue(self.skill_adaptation.is_empty())
 
 
 class SQLitePipelineTest(unittest.TestCase):
@@ -627,8 +711,9 @@ class SQLiteErrorContractTest(unittest.TestCase):
                     self.assertEqual(snapshot["memory_flow_count"], 0)
                     self.assertEqual(
                         set(snapshot["profile"]["models"]),
-                        {"learner_model", "teaching_adaptation_model", "context_model"},
+                        {"learner_model", "context_model"},
                     )
+                    self.assertEqual(snapshot["skill_adaptation"]["health"]["status"], "error")
                     self.assertEqual(snapshot["profile"]["health"]["status"], "error")
                     self.assertEqual(snapshot["storage_health"]["status"], "error")
 

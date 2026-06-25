@@ -91,7 +91,7 @@ def decode_vector(blob: bytes, dimensions: int) -> list[float]:
     return values.astype(float).tolist()
 
 
-SCHEMA_V2 = """
+SCHEMA_V3 = """
 CREATE TABLE IF NOT EXISTS sessions (
     session_id TEXT PRIMARY KEY,
     created_at TEXT NOT NULL,
@@ -152,7 +152,7 @@ CREATE INDEX IF NOT EXISTS idx_edges_target_type ON edges(target, edge_type);
 
 CREATE TABLE IF NOT EXISTS profile_models (
     model_name TEXT PRIMARY KEY CHECK (
-        model_name IN ('learner_model', 'teaching_adaptation_model', 'context_model')
+        model_name IN ('learner_model', 'context_model')
     ),
     summary TEXT NOT NULL DEFAULT '',
     updated_at TEXT,
@@ -168,6 +168,21 @@ CREATE TABLE IF NOT EXISTS profile_changes (
 );
 CREATE INDEX IF NOT EXISTS idx_profile_changes_recent
 ON profile_changes(change_id DESC);
+
+CREATE TABLE IF NOT EXISTS skill_adaptation (
+    key TEXT PRIMARY KEY CHECK (key = 'default'),
+    summary TEXT NOT NULL DEFAULT '',
+    updated_at TEXT,
+    revisions INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS skill_adaptation_changes (
+    change_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    changed_at TEXT NOT NULL,
+    note TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_skill_adaptation_changes_recent
+ON skill_adaptation_changes(change_id DESC);
 
 CREATE TABLE IF NOT EXISTS embeddings (
     node_id TEXT PRIMARY KEY,
@@ -186,7 +201,7 @@ ON embeddings(provider, model_id, dimensions);
 
 
 class SQLiteStorage:
-    SCHEMA_VERSION = 2
+    SCHEMA_VERSION = 3
 
     def __init__(self, path: Path):
         self.path = Path(path)
@@ -209,24 +224,30 @@ class SQLiteStorage:
         with self.connect() as connection:
             connection.execute("PRAGMA journal_mode = WAL")
             version = int(connection.execute("PRAGMA user_version").fetchone()[0])
-            if version not in {0, 1, self.SCHEMA_VERSION}:
+            if version not in {0, 1, 2, self.SCHEMA_VERSION}:
                 raise StorageIntegrityError(
                     f"Unsupported SQLite schema version {version}; "
-                    f"expected 1 or {self.SCHEMA_VERSION}"
+                    f"expected 1, 2, or {self.SCHEMA_VERSION}"
                 )
             if version == 0:
-                connection.executescript(SCHEMA_V2)
+                connection.executescript(SCHEMA_V3)
                 connection.execute(f"PRAGMA user_version = {self.SCHEMA_VERSION}")
             elif version == 1:
                 self._migrate_v1_to_v2(connection)
+                self._migrate_v2_to_v3(connection)
+            elif version == 2:
+                self._migrate_v2_to_v3(connection)
             connection.executemany(
                 "INSERT OR IGNORE INTO profile_models"
                 "(model_name, summary, updated_at, revisions) VALUES (?, '', NULL, 0)",
                 [
                     ("learner_model",),
-                    ("teaching_adaptation_model",),
                     ("context_model",),
                 ],
+            )
+            connection.execute(
+                "INSERT OR IGNORE INTO skill_adaptation"
+                "(key, summary, updated_at, revisions) VALUES ('default', '', NULL, 0)"
             )
             connection.commit()
 
@@ -281,6 +302,90 @@ class SQLiteStorage:
                 CREATE INDEX idx_profile_changes_recent
                 ON profile_changes(change_id DESC);
                 PRAGMA user_version = 2;
+                COMMIT;
+                """
+            )
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.execute("PRAGMA foreign_keys = ON")
+
+    @staticmethod
+    def _migrate_v2_to_v3(connection: sqlite3.Connection) -> None:
+        """Move teaching-adaptation evidence out of profile_models."""
+        connection.commit()
+        connection.execute("PRAGMA foreign_keys = OFF")
+        try:
+            connection.executescript(
+                """
+                BEGIN IMMEDIATE;
+                DROP INDEX IF EXISTS idx_profile_changes_recent;
+                ALTER TABLE profile_changes RENAME TO profile_changes_v2;
+                ALTER TABLE profile_models RENAME TO profile_models_v2;
+
+                CREATE TABLE profile_models (
+                    model_name TEXT PRIMARY KEY CHECK (
+                        model_name IN ('learner_model', 'context_model')
+                    ),
+                    summary TEXT NOT NULL DEFAULT '',
+                    updated_at TEXT,
+                    revisions INTEGER NOT NULL DEFAULT 0
+                );
+
+                INSERT INTO profile_models(model_name, summary, updated_at, revisions)
+                SELECT model_name, summary, updated_at, revisions
+                FROM profile_models_v2
+                WHERE model_name IN ('learner_model', 'context_model');
+
+                CREATE TABLE profile_changes (
+                    change_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    changed_at TEXT NOT NULL,
+                    model_name TEXT NOT NULL,
+                    note TEXT NOT NULL,
+                    FOREIGN KEY (model_name) REFERENCES profile_models(model_name)
+                );
+
+                INSERT INTO profile_changes(changed_at, model_name, note)
+                SELECT changed_at, model_name, note
+                FROM profile_changes_v2
+                WHERE model_name IN ('learner_model', 'context_model')
+                ORDER BY change_id ASC;
+
+                CREATE TABLE skill_adaptation (
+                    key TEXT PRIMARY KEY CHECK (key = 'default'),
+                    summary TEXT NOT NULL DEFAULT '',
+                    updated_at TEXT,
+                    revisions INTEGER NOT NULL DEFAULT 0
+                );
+
+                INSERT INTO skill_adaptation(key, summary, updated_at, revisions)
+                SELECT 'default', summary, updated_at, revisions
+                FROM profile_models_v2
+                WHERE model_name = 'teaching_adaptation_model';
+
+                INSERT OR IGNORE INTO skill_adaptation(key, summary, updated_at, revisions)
+                VALUES ('default', '', NULL, 0);
+
+                CREATE TABLE skill_adaptation_changes (
+                    change_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    changed_at TEXT NOT NULL,
+                    note TEXT NOT NULL
+                );
+
+                INSERT INTO skill_adaptation_changes(changed_at, note)
+                SELECT changed_at, note
+                FROM profile_changes_v2
+                WHERE model_name = 'teaching_adaptation_model'
+                ORDER BY change_id ASC;
+
+                DROP TABLE profile_changes_v2;
+                DROP TABLE profile_models_v2;
+                CREATE INDEX idx_profile_changes_recent
+                ON profile_changes(change_id DESC);
+                CREATE INDEX idx_skill_adaptation_changes_recent
+                ON skill_adaptation_changes(change_id DESC);
+                PRAGMA user_version = 3;
                 COMMIT;
                 """
             )

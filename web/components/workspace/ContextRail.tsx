@@ -13,7 +13,7 @@ const MODEL_ORDER: ProfileModelName[] = [
 
 export function ContextRail({ context }: { context: RetrievedContext | null }) {
   const adaptationSummary =
-    context?.profile?.models.teaching_adaptation_model?.summary?.trim() ?? "";
+    context?.skill_adaptation?.summary?.trim() ?? "";
   const skillSelection = context?.skill_selection;
 
   return (
@@ -62,7 +62,7 @@ export function ContextRail({ context }: { context: RetrievedContext | null }) {
             Skill 适配依据
           </div>
           <p className="mt-2 text-xs leading-5 text-[var(--muted-foreground)]">
-            该段画像仅参与 Skill 重排与过滤，不会作为完整文本注入 Tutor Prompt。
+            该段证据仅参与 Skill 重排与过滤，不会作为完整文本注入 Tutor Prompt。
           </p>
           {adaptationSummary ? (
             <div className="mt-3 rounded-2xl border border-sky-100 bg-sky-50/60 p-3 text-sm leading-6 text-[var(--foreground)]">

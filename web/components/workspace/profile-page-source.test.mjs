@@ -34,10 +34,13 @@ test("memory workspace does not own the learner profile panel", () => {
   assert.doesNotMatch(memoryWorkspaceSource, /snapshot\.profile\.items/);
 });
 
-test("profile workspace uses three-model profile system", () => {
+test("profile workspace uses two-portrait profile system", () => {
   assert.match(profileWorkspaceSource, /learner_model/);
-  assert.match(profileWorkspaceSource, /teaching_adaptation_model/);
   assert.match(profileWorkspaceSource, /context_model/);
+  assert.match(profileWorkspaceSource, /学习者画像/);
+  assert.match(profileWorkspaceSource, /情境画像/);
+  assert.doesNotMatch(profileWorkspaceSource, /teaching_adaptation_model/);
+  assert.doesNotMatch(profileWorkspaceSource, /教学适配模型/);
   assert.doesNotMatch(profileWorkspaceSource, /strategy_model/);
 });
 

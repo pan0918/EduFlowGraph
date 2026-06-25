@@ -9,10 +9,12 @@ from typing import Any
 import numpy as np
 
 from .profile_store import LearnerProfileStore
+from .skill_adaptation_store import LEGACY_MODEL_NAME, SkillAdaptationStore
 from .sqlite_conversation_log import SQLiteConversationLog
 from .sqlite_graph_store import SQLiteGraphStore
 from .sqlite_memory_flow import SQLiteMemoryFlow, strip_embedding_vectors
 from .sqlite_profile_store import SQLiteLearnerProfileStore
+from .sqlite_skill_adaptation_store import SQLiteSkillAdaptationStore
 from .sqlite_storage import SQLiteStorage, encode_json, encode_vector
 
 
@@ -27,6 +29,7 @@ class LegacySnapshot:
     nodes: dict[str, dict[str, Any]]
     edges: list[dict[str, Any]]
     profile: dict[str, Any]
+    skill_adaptation: dict[str, Any]
 
     def counts(self) -> dict[str, int]:
         return {
@@ -92,15 +95,56 @@ def load_legacy_snapshot(data_dir: Path) -> LegacySnapshot:
     raw_profile = _read_json(data_dir / "learner_profile.json", {}, dict)
     normalizer = LearnerProfileStore(data_dir)
     profile = normalizer._normalize_snapshot(raw_profile) if raw_profile else normalizer.empty_snapshot()
+    skill_adaptation = _load_legacy_skill_adaptation(data_dir, raw_profile)
     snapshot = LegacySnapshot(
         turns=turns,
         events=events,
         nodes={str(key): value for key, value in nodes.items()},
         edges=edges,
         profile=profile,
+        skill_adaptation=skill_adaptation,
     )
     validate_legacy_snapshot(snapshot)
     return snapshot
+
+
+def _load_legacy_skill_adaptation(
+    data_dir: Path,
+    raw_profile: dict[str, Any],
+) -> dict[str, Any]:
+    store = SkillAdaptationStore(data_dir)
+    raw_skill = _read_json(data_dir / "skill_adaptation.json", {}, dict)
+    if raw_skill:
+        return store._normalize_snapshot(raw_skill)
+
+    models = raw_profile.get("models") if isinstance(raw_profile, dict) else None
+    entry = models.get(LEGACY_MODEL_NAME) if isinstance(models, dict) else None
+    if not isinstance(entry, dict):
+        return store.empty_snapshot()
+    summary = str(entry.get("summary", "")).strip()
+    if not summary:
+        return store.empty_snapshot()
+    recent = raw_profile.get("recent_changes", [])
+    if not isinstance(recent, list):
+        recent = []
+    return store._normalize_snapshot(
+        {
+            "summary": summary,
+            "updated_at": entry.get("updated_at"),
+            "revisions": int(entry.get("revisions", 0) or 0),
+            "recent_changes": [
+                {
+                    "at": change.get("at"),
+                    "note": str(change.get("note", "")),
+                }
+                for change in recent
+                if isinstance(change, dict)
+                and change.get("model") == LEGACY_MODEL_NAME
+                and str(change.get("note", "")).strip()
+            ],
+            "health": {"status": "ok", "message": ""},
+        }
+    )
 
 
 def validate_legacy_snapshot(snapshot: LegacySnapshot) -> None:
@@ -221,6 +265,7 @@ def _import_snapshot(snapshot: LegacySnapshot, database_path: Path) -> None:
     graph.edges = [dict(edge) for edge in snapshot.edges]
     graph.save()
     SQLiteLearnerProfileStore(storage).save(snapshot.profile)
+    SQLiteSkillAdaptationStore(storage).save(snapshot.skill_adaptation)
 
 
 def _without_vectors(value: Any) -> Any:
@@ -234,6 +279,7 @@ def verify_migration(data_dir: Path, database_path: Path) -> dict[str, Any]:
     flow = SQLiteMemoryFlow(storage)
     graph = SQLiteGraphStore(storage)
     profile = SQLiteLearnerProfileStore(storage).load()
+    skill_adaptation = SQLiteSkillAdaptationStore(storage).load()
 
     sqlite_turns = [
         turn
@@ -281,6 +327,8 @@ def verify_migration(data_dir: Path, database_path: Path) -> dict[str, Any]:
         raise MigrationValidationError("profile changes verification mismatch")
     if profile["revision_count"] != snapshot.profile["revision_count"]:
         raise MigrationValidationError("profile revision verification mismatch")
+    if skill_adaptation != snapshot.skill_adaptation:
+        raise MigrationValidationError("skill adaptation verification mismatch")
     return {"status": "ok", "counts": snapshot.counts()}
 
 
@@ -314,7 +362,8 @@ def migrate_legacy_storage(
                     "(SELECT COUNT(*) FROM memory_events), "
                     "(SELECT COUNT(*) FROM nodes), "
                     "(SELECT COUNT(*) FROM edges), "
-                    "(SELECT COALESCE(SUM(revisions), 0) FROM profile_models)"
+                    "(SELECT COALESCE(SUM(revisions), 0) FROM profile_models), "
+                    "(SELECT COALESCE(SUM(revisions), 0) FROM skill_adaptation)"
                 ).fetchone()
             if any(int(value) != 0 for value in counts):
                 raise MigrationValidationError(
@@ -374,6 +423,7 @@ def export_sqlite_storage(
     flow = SQLiteMemoryFlow(storage)
     graph = SQLiteGraphStore(storage)
     profile = SQLiteLearnerProfileStore(storage).load()
+    skill_adaptation = SQLiteSkillAdaptationStore(storage).load()
 
     conversations_dir = temporary_dir / "conversations"
     conversations_dir.mkdir(parents=True)
@@ -404,6 +454,10 @@ def export_sqlite_storage(
     )
     (temporary_dir / "learner_profile.json").write_text(
         json.dumps(profile, ensure_ascii=False, indent=2, allow_nan=False) + "\n",
+        encoding="utf-8",
+    )
+    (temporary_dir / "skill_adaptation.json").write_text(
+        json.dumps(skill_adaptation, ensure_ascii=False, indent=2, allow_nan=False) + "\n",
         encoding="utf-8",
     )
 

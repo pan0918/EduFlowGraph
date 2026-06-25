@@ -53,6 +53,7 @@ from EduFlowGraph.store.conversation_log import ConversationLog
 from EduFlowGraph.store.graph_store import GraphStore
 from EduFlowGraph.store.memory_flow import MemoryFlow
 from EduFlowGraph.store.profile_store import LearnerProfileStore
+from EduFlowGraph.store.skill_adaptation_store import SkillAdaptationStore
 from EduFlowGraph.profile.dimensions import (
     PROFILE_MODELS,
     MODEL_NAMES,
@@ -60,6 +61,7 @@ from EduFlowGraph.profile.dimensions import (
     TURN_MODEL,
     MAX_RECENT_CHANGES,
     model_budget,
+    skill_adaptation_budget,
 )
 from EduFlowGraph.profile.aggregator import summarize_profile, profile_is_populated
 from EduFlowGraph.profile.consolidator import ProfileConsolidator
@@ -336,21 +338,15 @@ class ProfileStoreTest(unittest.TestCase):
             store.update_models(
                 {
                     "learner_model": {"summary": "已掌握PPO基础。", "note": "新增：PPO"},
-                    "teaching_adaptation_model": {
-                        "summary": "更适合先用低认知负荷的类比 Skill。",
-                        "note": "新增：Skill 适配偏好",
-                    },
+                    "context_model": {"summary": "当前在探索阶段。", "note": "更新情境"},
                 }
             )
             snap = store.load()
             self.assertEqual(snap["models"]["learner_model"]["summary"], "已掌握PPO基础。")
-            self.assertEqual(
-                snap["models"]["teaching_adaptation_model"]["summary"],
-                "更适合先用低认知负荷的类比 Skill。",
-            )
+            self.assertEqual(snap["models"]["context_model"]["summary"], "当前在探索阶段。")
             self.assertEqual(snap["revision_count"], 2)
 
-    def test_legacy_strategy_summary_is_not_carried_into_new_profile(self):
+    def test_legacy_strategy_and_adaptation_are_not_carried_into_profile(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = LearnerProfileStore(Path(tmp))
             normalized = store._normalize_snapshot(
@@ -358,15 +354,13 @@ class ProfileStoreTest(unittest.TestCase):
                     "models": {
                         "learner_model": {"summary": "学习者摘要"},
                         "strategy_model": {"summary": "旧教学程序"},
+                        "teaching_adaptation_model": {"summary": "旧适配证据"},
                         "context_model": {"summary": "当前探索"},
                     }
                 }
             )
 
-            self.assertEqual(
-                normalized["models"]["teaching_adaptation_model"]["summary"],
-                "",
-            )
+            self.assertNotIn("teaching_adaptation_model", normalized["models"])
             self.assertNotIn("strategy_model", normalized["models"])
 
     def test_recent_changes_bounded(self):
@@ -405,6 +399,61 @@ class ProfileStoreTest(unittest.TestCase):
             self.assertTrue(store.is_empty())
 
 
+class SkillAdaptationStoreTest(unittest.TestCase):
+    def test_empty_snapshot_shape(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = SkillAdaptationStore(Path(tmp))
+            snap = store.load()
+            self.assertEqual(snap["summary"], "")
+            self.assertEqual(snap["revisions"], 0)
+            self.assertEqual(snap["recent_changes"], [])
+            self.assertTrue(store.is_empty())
+
+    def test_update_rewrites_summary(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = SkillAdaptationStore(Path(tmp))
+            store.update("优先选择低认知负荷的类比 Skill。", note="新增适配证据")
+            snap = store.load()
+            self.assertEqual(snap["summary"], "优先选择低认知负荷的类比 Skill。")
+            self.assertEqual(snap["revisions"], 1)
+            self.assertEqual(snap["recent_changes"][0]["note"], "新增适配证据")
+            self.assertFalse(store.is_empty())
+
+    def test_migrates_legacy_teaching_adaptation_from_profile(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp)
+            (data_dir / "learner_profile.json").write_text(
+                json.dumps(
+                    {
+                        "models": {
+                            "learner_model": {"summary": "学习者摘要"},
+                            "teaching_adaptation_model": {
+                                "summary": "旧 Skill 适配证据。",
+                                "updated_at": "2026-06-24T16:41:00Z",
+                                "revisions": 3,
+                            },
+                            "context_model": {"summary": "当前探索"},
+                        },
+                        "recent_changes": [
+                            {
+                                "at": "2026-06-24T16:41:00Z",
+                                "model": "teaching_adaptation_model",
+                                "note": "旧适配变更",
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            store = SkillAdaptationStore(data_dir)
+            store.migrate_legacy_if_needed()
+            snap = store.load()
+            self.assertEqual(snap["summary"], "旧 Skill 适配证据。")
+            self.assertEqual(snap["updated_at"], "2026-06-24T16:41:00Z")
+            self.assertEqual(snap["revisions"], 3)
+            self.assertEqual(snap["recent_changes"][0]["note"], "旧适配变更")
+
+
 class ProfileConsolidatorTest(unittest.TestCase):
     def test_episode_mock_consolidation(self):
         class _MockLLM:
@@ -420,7 +469,7 @@ class ProfileConsolidatorTest(unittest.TestCase):
         updates = consolidator.consolidate_episode(
             current={
                 "learner_model": "",
-                "teaching_adaptation_model": "",
+                "skill_adaptation": "",
                 "context_model": "",
             },
             episode=episode,
@@ -434,19 +483,24 @@ class ProfileConsolidatorTest(unittest.TestCase):
         self.assertNotIn("已建立较好理解", summary)
         self.assertNotIn("已掌握", summary)
         self.assertLessEqual(len(summary), model_budget("learner_model"))
-        adaptation = updates.get("teaching_adaptation_model", {}).get("summary", "")
+        adaptation = updates.get("skill_adaptation", {}).get("summary", "")
         self.assertTrue(adaptation)
         self.assertIn("Skill", adaptation)
         self.assertIn("例题", adaptation)
+        self.assertLessEqual(len(adaptation), skill_adaptation_budget())
+        self.assertNotIn("teaching_adaptation_model", updates)
         self.assertNotIn("strategy_model", updates)
         self.assertNotIn("贝叶斯定理如何", adaptation)
 
     def test_profile_prompts_define_skill_selection_boundary(self):
-        self.assertIn("teaching_adaptation_model", PROFILE_UPDATE_PROMPT)
+        self.assertIn("skill_adaptation", PROFILE_UPDATE_PROMPT)
         self.assertIn("Skill", PROFILE_UPDATE_PROMPT)
         self.assertIn("不保存具体教学程序", PROFILE_UPDATE_PROMPT)
+        self.assertIn("不属于用户画像", PROFILE_UPDATE_PROMPT)
+        self.assertNotIn("teaching_adaptation_model", PROFILE_UPDATE_PROMPT)
         self.assertNotIn("strategy_model", PROFILE_UPDATE_PROMPT)
-        self.assertIn("teaching_adaptation_model", PROFILE_CONDENSE_PROMPT)
+        self.assertIn("skill_adaptation", PROFILE_CONDENSE_PROMPT)
+        self.assertNotIn("teaching_adaptation_model", PROFILE_CONDENSE_PROMPT)
         self.assertNotIn("strategy_model", PROFILE_CONDENSE_PROMPT)
 
     def test_context_mock_update(self):
@@ -496,13 +550,12 @@ class ProfileConsolidatorTest(unittest.TestCase):
         trimmed = consolidator._sanitize_summary(long_text, "learner_model", budget)
         self.assertLessEqual(len(trimmed), budget)
         self.assertIn("贝叶斯", trimmed)
-        self.assertIn("用户画像压缩", llm.last_prompt)
+        self.assertIn("记忆摘要压缩", llm.last_prompt)
 
     def test_render_profile_context(self):
         snapshot = {
             "models": {
                 "learner_model": {"summary": "理解PPO基础。"},
-                "teaching_adaptation_model": {"summary": "更适合先用直观类比。"},
                 "context_model": {"summary": "当前处于探索阶段。"},
             }
         }
@@ -511,20 +564,18 @@ class ProfileConsolidatorTest(unittest.TestCase):
         self.assertIn("理解PPO基础", rendered)
         self.assertIn("当前学习情境", rendered)
         self.assertIn("当前处于探索阶段", rendered)
-        self.assertNotIn("更适合先用直观类比", rendered)
-        self.assertNotIn("教学适配模型", rendered)
+        self.assertNotIn("Skill 适配", rendered)
 
     def test_aggregator_summary(self):
         snapshot = {
             "models": {
                 "learner_model": {"summary": "理解PPO。", "revisions": 2},
-                "teaching_adaptation_model": {"summary": "", "revisions": 0},
                 "context_model": {"summary": "练习阶段。", "revisions": 1},
             }
         }
         overview = summarize_profile(snapshot)
+        self.assertEqual(set(overview), set(MODEL_NAMES))
         self.assertTrue(overview["learner_model"]["has_content"])
-        self.assertFalse(overview["teaching_adaptation_model"]["has_content"])
         self.assertEqual(overview["learner_model"]["revisions"], 2)
         self.assertTrue(profile_is_populated(snapshot))
         self.assertFalse(profile_is_populated({"models": {}}))
@@ -1072,23 +1123,18 @@ class BufferManagerTest(unittest.TestCase):
 
 
 class ProfileDimensionsTest(unittest.TestCase):
-    def test_three_models_defined(self):
-        self.assertEqual(
-            MODEL_NAMES,
-            ("learner_model", "teaching_adaptation_model", "context_model"),
-        )
+    def test_two_portrait_models_defined(self):
+        self.assertEqual(MODEL_NAMES, ("learner_model", "context_model"))
 
     def test_model_triggers(self):
-        self.assertEqual(
-            set(EPISODE_MODELS),
-            {"learner_model", "teaching_adaptation_model"},
-        )
+        self.assertEqual(set(EPISODE_MODELS), {"learner_model"})
         self.assertEqual(TURN_MODEL, "context_model")
 
     def test_model_budgets(self):
         for name in MODEL_NAMES:
             self.assertGreater(model_budget(name), 0)
-        self.assertEqual(len(PROFILE_MODELS), 3)
+        self.assertGreater(skill_adaptation_budget(), 0)
+        self.assertEqual(len(PROFILE_MODELS), 2)
 
 
 class PipelineIntegrationTest(unittest.TestCase):
@@ -1161,6 +1207,7 @@ class PipelineIntegrationTest(unittest.TestCase):
             self.assertIn("episodes", dash)
             self.assertIn("skills", dash)
             self.assertIn("profile", dash)
+            self.assertIn("skill_adaptation", dash)
 
     def test_dashboard_reloads_graph_from_disk(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1203,17 +1250,14 @@ class PipelineIntegrationTest(unittest.TestCase):
             pipeline = TutorPipeline(
                 load_settings_from_mapping({"data_dir": tmp, "provider": "mock"})
             )
-            pipeline.profile_store.update_models(
-                {
-                    "context_model": {
-                        "summary": "当前处于探索阶段。",
-                        "note": "更新情境",
-                    },
-                    "teaching_adaptation_model": {
-                        "summary": "优先选择低认知负荷的类比 Skill。避免一开始堆叠公式。",
-                        "note": "新增适配偏好",
-                    },
-                }
+            pipeline.profile_store.update_model(
+                "context_model",
+                "当前处于探索阶段。",
+                note="更新情境",
+            )
+            pipeline.skill_adaptation_store.update(
+                "优先选择低认知负荷的类比 Skill。避免一开始堆叠公式。",
+                note="新增适配偏好",
             )
             pipeline.retriever.retrieve = lambda query: self._retrieval_context(  # type: ignore[method-assign]
                 [self._skill_candidate()]
@@ -1239,8 +1283,7 @@ class PipelineIntegrationTest(unittest.TestCase):
             pipeline = TutorPipeline(
                 load_settings_from_mapping({"data_dir": tmp, "provider": "mock"})
             )
-            pipeline.profile_store.update_model(
-                "teaching_adaptation_model",
+            pipeline.skill_adaptation_store.update(
                 "先用直观类比建立理解。随后逐步进入形式化推导。",
                 note="新增适配偏好",
             )

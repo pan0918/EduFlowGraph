@@ -84,10 +84,7 @@ export interface SkillNode {
   };
 }
 
-export type ProfileModelName =
-  | "learner_model"
-  | "teaching_adaptation_model"
-  | "context_model";
+export type ProfileModelName = "learner_model" | "context_model";
 
 export interface ProfileModelEntry {
   summary: string;
@@ -104,12 +101,27 @@ export interface ProfileChange {
 export interface LearnerProfileSnapshot {
   models: {
     learner_model: ProfileModelEntry;
-    teaching_adaptation_model: ProfileModelEntry;
     context_model: ProfileModelEntry;
   };
   recent_changes: ProfileChange[];
   updated_at?: string | null;
   revision_count: number;
+  health: {
+    status: string;
+    message?: string;
+  };
+}
+
+export interface SkillAdaptationChange {
+  at?: string | null;
+  note: string;
+}
+
+export interface SkillAdaptationSnapshot {
+  summary: string;
+  updated_at?: string | null;
+  revisions: number;
+  recent_changes: SkillAdaptationChange[];
   health: {
     status: string;
     message?: string;
@@ -154,6 +166,7 @@ export interface DashboardSnapshot {
   skills: SkillNode[];
   edges: GraphEdge[];
   profile: LearnerProfileSnapshot;
+  skill_adaptation: SkillAdaptationSnapshot;
   memory_flow_count: number;
   retrieval_health?: {
     total_nodes: number;
@@ -177,6 +190,7 @@ export interface RetrievedContext {
   episodes: EpisodeNode[];
   skills: SkillNode[];
   profile?: LearnerProfileSnapshot;
+  skill_adaptation?: SkillAdaptationSnapshot;
   profile_context?: string;
   skill_selection?: {
     candidate_count: number;

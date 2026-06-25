@@ -48,6 +48,7 @@ from .memory.skill_pipeline import (
     skill_matches_evidence,
 )
 from .profile.consolidator import ProfileConsolidator
+from .profile.dimensions import MODEL_NAMES
 from .profile.retriever import render_profile_context
 from .prompts import (
     CONCEPT_EXTRACTION_PROMPT,
@@ -63,10 +64,12 @@ from .store.conversation_log import ConversationLog
 from .store.graph_store import GraphStore
 from .store.memory_flow import MemoryFlow
 from .store.profile_store import LearnerProfileStore
+from .store.skill_adaptation_store import SkillAdaptationStore
 from .store.sqlite_conversation_log import SQLiteConversationLog
 from .store.sqlite_graph_store import SQLiteGraphStore
 from .store.sqlite_memory_flow import SQLiteMemoryFlow
 from .store.sqlite_profile_store import SQLiteLearnerProfileStore
+from .store.sqlite_skill_adaptation_store import SQLiteSkillAdaptationStore
 from .store.sqlite_storage import SQLiteStorage, StorageError
 
 
@@ -82,11 +85,13 @@ class TutorPipeline:
             self.memory_flow = SQLiteMemoryFlow(self.storage)
             self.graph = SQLiteGraphStore(self.storage)
             self.profile_store = SQLiteLearnerProfileStore(self.storage)
+            self.skill_adaptation_store = SQLiteSkillAdaptationStore(self.storage)
         else:
             self.conv_log = ConversationLog(settings.conversations_dir)
             self.memory_flow = MemoryFlow(settings.memory_flow_path)
             self.graph = GraphStore(settings.nodes_path, settings.edges_path)
             self.profile_store = LearnerProfileStore(settings.data_dir)
+            self.skill_adaptation_store = SkillAdaptationStore(settings.data_dir)
 
         self.extractor = HeuristicEpisodeExtractor()
         self.concept_extractor = HeuristicConceptExtractor()
@@ -136,6 +141,7 @@ class TutorPipeline:
             )
         )
         self.profile_consolidator = ProfileConsolidator(self.llm)
+        self.skill_adaptation_store.migrate_legacy_if_needed()
         self.profile_store.migrate_legacy_if_needed()
         # Serializes stateful turn handling so a follow-up request (sent as soon
         # as the answer settles) cannot race with the previous turn's still-running
@@ -813,9 +819,12 @@ class TutorPipeline:
         concept_result: dict[str, Any] | None,
         skill_evidence: dict[str, Any] | None,
     ) -> None:
-        """Rewrite learner and teaching-adaptation paragraphs at episode boundaries."""
+        """Rewrite learner portrait and Skill-adaptation notes at episode boundaries."""
         try:
-            current = self.profile_store.summaries()
+            current = {
+                **self.profile_store.summaries(),
+                "skill_adaptation": self.skill_adaptation_store.summary(),
+            }
             updates = self.profile_consolidator.consolidate_episode(
                 current=current,
                 episode=episode,
@@ -823,14 +832,27 @@ class TutorPipeline:
                 skill_evidence=skill_evidence,
             )
             if updates:
+                profile_updates = {
+                    name: payload
+                    for name, payload in updates.items()
+                    if name in MODEL_NAMES
+                }
+                skill_adaptation_update = updates.get("skill_adaptation")
                 with self._storage_transaction():
-                    self.profile_store.update_models(updates)
+                    if profile_updates:
+                        self.profile_store.update_models(profile_updates)
+                    if isinstance(skill_adaptation_update, dict):
+                        self.skill_adaptation_store.update(
+                            str(skill_adaptation_update.get("summary", "")),
+                            note=str(skill_adaptation_update.get("note", "")),
+                        )
                     self.memory_flow.emit(
                         "profile_updated",
                         episode.get("provenance", {}).get("session_id", ""),
                         {
                             "episode_id": episode.get("episode_id", ""),
-                            "updated_models": sorted(updates.keys()),
+                            "updated_models": sorted(profile_updates.keys()),
+                            "skill_adaptation_updated": bool(skill_adaptation_update),
                         },
                     )
         except Exception:
@@ -844,13 +866,12 @@ class TutorPipeline:
         """Apply text-profile evidence to Skill selection and prompt-safe context."""
         fused = dict(context)
         profile_snapshot = self.profile_store.load()
+        skill_adaptation_snapshot = self.skill_adaptation_store.load()
         models = profile_snapshot.get("models", {})
         context_summary = str(
             models.get("context_model", {}).get("summary", "")
         ).strip()
-        adaptation_summary = str(
-            models.get("teaching_adaptation_model", {}).get("summary", "")
-        ).strip()
+        adaptation_summary = str(skill_adaptation_snapshot.get("summary", "")).strip()
         selection = self.skill_reranker.select(
             query=query,
             context_summary=context_summary,
@@ -861,6 +882,7 @@ class TutorPipeline:
         fused["skill_selection"] = selection["skill_selection"]
         fused.pop("skill_candidates", None)
         fused["profile"] = profile_snapshot
+        fused["skill_adaptation"] = skill_adaptation_snapshot
         fused["profile_context"] = render_profile_context(profile_snapshot)
         fused["memory_context_pack"] = self.retriever.render_context(fused)
         return fused
@@ -1151,6 +1173,7 @@ class TutorPipeline:
             self.graph.reset()
             self.graph.save()
             self.profile_store.clear()
+            self.skill_adaptation_store.clear()
         self.buffer = BufferManager()
         self._closed_segments = []
         return {"deleted": "all"}
@@ -1205,6 +1228,7 @@ class TutorPipeline:
                 "skills": [strip(n) for n in self.graph.nodes_by_type("skill").values()],
                 "edges": self.graph.edges,
                 "profile": self.profile_store.load(),
+                "skill_adaptation": self.skill_adaptation_store.load(),
                 "memory_events": event_summaries,
                 "memory_flow_count": len(events),
             }
@@ -1219,12 +1243,18 @@ class TutorPipeline:
                 "status": "error",
                 "message": f"存储读取失败：{error}",
             }
+            skill_adaptation = self.skill_adaptation_store.empty_snapshot()
+            skill_adaptation["health"] = {
+                "status": "error",
+                "message": f"存储读取失败：{error}",
+            }
             return {
                 "concepts": [],
                 "episodes": [],
                 "skills": [],
                 "edges": [],
                 "profile": profile,
+                "skill_adaptation": skill_adaptation,
                 "memory_events": [],
                 "memory_flow_count": 0,
                 "storage_health": {

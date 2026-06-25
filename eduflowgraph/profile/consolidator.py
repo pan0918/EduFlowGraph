@@ -1,9 +1,9 @@
-"""Lightweight profile consolidator.
+"""Lightweight profile and Skill-adaptation consolidator.
 
-Rewrites the three short profile paragraphs instead of accumulating evidence:
+Rewrites short memory-note paragraphs instead of accumulating evidence:
 
 * ``consolidate_episode`` rewrites ``learner_model`` and
-  ``teaching_adaptation_model`` at episode boundaries in a single LLM call.
+  ``skill_adaptation`` at episode boundaries in a single LLM call.
 * ``update_context`` lightly rewrites ``context_model`` every turn (time-sensitive).
 
 Both have a deterministic mock path (no live LLM) that performs real add/remove
@@ -18,7 +18,7 @@ from typing import Any
 from ..llm import messages_for_prompt
 from ..prompts import CONTEXT_UPDATE_PROMPT, PROFILE_CONDENSE_PROMPT, PROFILE_UPDATE_PROMPT
 from ..skills import TEACHING_ACTIONS
-from .dimensions import PROFILE_MODELS, model_budget
+from .dimensions import PROFILE_MODELS, SKILL_ADAPTATION_META, model_budget, skill_adaptation_budget
 
 _SENTENCE_SPLIT = re.compile(r"[。；\n]+")
 
@@ -52,7 +52,7 @@ class ProfileConsolidator:
     def __init__(self, llm: Any):
         self.llm = llm
 
-    # ── Episode-level: learner + teaching adaptation ───────────────
+    # ── Episode-level: learner portrait + Skill adaptation ─────────
 
     def consolidate_episode(
         self,
@@ -96,9 +96,9 @@ class ProfileConsolidator:
         ]
         prompt = PROFILE_UPDATE_PROMPT.format(
             learner_budget=model_budget("learner_model"),
-            adaptation_budget=model_budget("teaching_adaptation_model"),
+            adaptation_budget=skill_adaptation_budget(),
             learner_current=current.get("learner_model", "") or "（暂无）",
-            adaptation_current=current.get("teaching_adaptation_model", "") or "（暂无）",
+            adaptation_current=current.get("skill_adaptation", "") or "（暂无）",
             episode_title=episode.get("title", ""),
             episode_summary=episode.get("summary", ""),
             episode_learner=f"目标：{learner.get('goal', '')}；障碍：{learner.get('obstacle', '')}",
@@ -112,13 +112,18 @@ class ProfileConsolidator:
         raw = self.llm.chat(messages_for_prompt(prompt), temperature=0)
         payload = _extract_json(raw)
         updates: dict[str, dict[str, str]] = {}
-        for model_name in ("learner_model", "teaching_adaptation_model"):
+        for model_name in ("learner_model", "skill_adaptation"):
             entry = payload.get(model_name)
             if isinstance(entry, dict):
+                budget = (
+                    skill_adaptation_budget()
+                    if model_name == "skill_adaptation"
+                    else model_budget(model_name)
+                )
                 summary = self._sanitize_summary(
                     str(entry.get("summary", "")).strip(),
                     model_name,
-                    model_budget(model_name),
+                    budget,
                 )
                 if summary:
                     updates[model_name] = {
@@ -180,7 +185,7 @@ class ProfileConsolidator:
         if note:
             updates["learner_model"] = {"summary": merged, "note": note}
 
-        # ── teaching_adaptation_model: generalized Skill preferences ──
+        # ── skill_adaptation: generalized Skill selection evidence ──
         if actions or next_step:
             primary = actions[0] if actions else ""
             action_label = _ACTION_LABELS.get(primary, primary) if primary else "低认知负荷讲解"
@@ -203,13 +208,13 @@ class ProfileConsolidator:
                 )
 
             merged_adaptation, adaptation_note = _merge_sentence(
-                current.get("teaching_adaptation_model", ""),
+                current.get("skill_adaptation", ""),
                 adaptation_sentence,
                 primary or difficulty,
-                budget=model_budget("teaching_adaptation_model"),
+                budget=skill_adaptation_budget(),
             )
             if adaptation_note:
-                updates["teaching_adaptation_model"] = {
+                updates["skill_adaptation"] = {
                     "summary": merged_adaptation,
                     "note": adaptation_note,
                 }
@@ -299,7 +304,11 @@ class ProfileConsolidator:
 
     def _condense_summary(self, text: str, model_name: str, budget: int) -> str:
         """Use LLM to compress over-budget summaries while preserving semantics."""
-        meta = PROFILE_MODELS.get(model_name, {})
+        meta = (
+            SKILL_ADAPTATION_META
+            if model_name == "skill_adaptation"
+            else PROFILE_MODELS.get(model_name, {})
+        )
         description = str(meta.get("description", "")).strip() or model_name
         current = text.strip()
         if len(current) <= budget:

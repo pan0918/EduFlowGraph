@@ -10,7 +10,6 @@ import type {
 } from "@/lib/types";
 import {
   Brain,
-  Compass,
   Clock,
   Sparkles,
   Layers,
@@ -36,7 +35,7 @@ interface ModelConfig {
 
 const MODEL_CONFIG: Record<ProfileModelName, ModelConfig> = {
   learner_model: {
-    label: "学习者模型",
+    label: "学习者画像",
     subtitle: "长期认知画像 — 稳定特征与待验证假设",
     icon: Brain,
     headerBg: "bg-amber-50/80",
@@ -47,20 +46,8 @@ const MODEL_CONFIG: Record<ProfileModelName, ModelConfig> = {
     accentColor: "bg-amber-400",
     emptyHint: "跨多轮学习后，这里会沉淀稳定的认知特征；单次“懂了”不会直接记为已掌握。",
   },
-  teaching_adaptation_model: {
-    label: "教学适配模型",
-    subtitle: "Skill 选择 — 个性化重排与过滤依据",
-    icon: Compass,
-    headerBg: "bg-sky-50/80",
-    headerBorder: "border-sky-100",
-    iconColor: "text-sky-600",
-    chipBg: "bg-sky-50",
-    chipText: "text-sky-800",
-    accentColor: "bg-sky-400",
-    emptyHint: "积累足够学习证据后，这里会描述更适合或应避免的 Skill 类型、认知负荷、节奏与验证偏好。",
-  },
   context_model: {
-    label: "情境模型",
+    label: "情境画像",
     subtitle: "当前场景 — 任务、阶段与情绪",
     icon: Clock,
     headerBg: "bg-violet-50/80",
@@ -73,11 +60,7 @@ const MODEL_CONFIG: Record<ProfileModelName, ModelConfig> = {
   },
 };
 
-const MODEL_ORDER: ProfileModelName[] = [
-  "learner_model",
-  "teaching_adaptation_model",
-  "context_model",
-];
+const MODEL_ORDER: ProfileModelName[] = ["learner_model", "context_model"];
 
 /* ──────────────────────── Helpers ──────────────────────── */
 
@@ -176,7 +159,7 @@ export function LearnerProfileWorkspace() {
         </div>
         <h1 className="mt-2 text-3xl font-semibold tracking-tight">学习者画像</h1>
         <p className="mt-2 max-w-3xl text-sm leading-6 text-[var(--muted-foreground)]">
-          轻量画像：学习者模型沉淀长期认知特征；情境模型描述当前任务、阶段与情绪；教学适配模型只为 Skill 的个性化重排、过滤和轻量调节提供依据。
+          沉淀学习者的长期认知特征与当前学习情境；Skill 适配证据已移至技能工作台，作为检索与重排依据单独维护。
         </p>
       </div>
 
@@ -186,10 +169,10 @@ export function LearnerProfileWorkspace() {
           <div className="flex items-center gap-2">
             <Layers className="h-4 w-4 text-[var(--muted-foreground)]" />
             <span className="text-xs uppercase tracking-[0.18em] text-[var(--muted-foreground)]">
-              已建立模型
+              已建立画像
             </span>
           </div>
-          <div className="mt-2 text-3xl font-semibold">{populated}/3</div>
+          <div className="mt-2 text-3xl font-semibold">{populated}/2</div>
           <div className="mt-1 text-xs text-[var(--muted-foreground)]">
             含内容的画像段落
           </div>
@@ -252,7 +235,7 @@ export function LearnerProfileWorkspace() {
               还没有学习画像
             </h2>
             <p className="mt-3 max-w-md text-sm leading-7 text-[var(--muted-foreground)]">
-              系统会从真实教学对话中持续提炼学习者模型、情境模型和教学适配模型；教学程序本身保存在 Skill 节点中。
+              系统会从真实教学对话中持续提炼学习者画像和情境画像；教学程序与适配证据保存在技能工作台中。
             </p>
             <div className="mt-8 flex flex-wrap justify-center gap-2">
               {MODEL_ORDER.map((m) => {
@@ -272,7 +255,7 @@ export function LearnerProfileWorkspace() {
           </div>
         </section>
       ) : (
-        <div className="mt-6 grid gap-5 lg:grid-cols-3">
+        <div className="mt-6 grid gap-5 lg:grid-cols-2">
           {MODEL_ORDER.map((m) => (
             <ModelCard key={m} modelName={m} entry={profile.models?.[m]} />
           ))}
