@@ -15,7 +15,7 @@
 7. [数据导出与回滚](#7-数据导出与回滚)
 8. [生产环境部署建议](#8-生产环境部署建议)
 9. [故障排查](#9-故障排查)
-10. [脚本参考](#10-脚本参考)
+10. [运维脚本](#10-运维脚本)
 
 ---
 
@@ -136,10 +136,12 @@ cp .env.example .env
 ### 3.4 验证安装
 
 ```bash
-# 运行端到端冒烟测试
-.venv/bin/python scripts/smoke_run.py
+# 启动服务
+.venv/bin/python scripts/start_web.py
 
-# 预期输出：5 轮对话的摘要、Episode 节点 ID、仪表盘统计
+# 验证后端健康
+curl http://127.0.0.1:8000/api/health
+# 预期响应：{"status": "ok"}
 ```
 
 ---
@@ -423,7 +425,7 @@ tail -f /var/log/eduflowgraph/access.log
 
 ---
 
-## 10. 脚本参考
+## 10. 运维脚本
 
 ### 10.1 `scripts/start_web.py` — 统一启动器
 
@@ -484,30 +486,3 @@ tail -f /var/log/eduflowgraph/access.log
   --output-dir data-export-$(date +%Y%m%d-%H%M%S)
 ```
 
-### 10.4 `scripts/smoke_run.py` — 端到端冒烟测试
-
-**功能**：使用 Mock 提供者运行完整的 5 轮对话测试，验证以下流程：
-
-1. 对话日志记录
-2. Episode 边界检测
-3. 概念提取
-4. 技能蒸馏
-5. 画像更新
-6. 仪表盘聚合
-
-**用法**：
-
-```bash
-.venv/bin/python scripts/smoke_run.py
-```
-
-**预期输出**：
-
-```
-Turn 1: answer=... episode=episode_xxx
-Turn 2: answer=... episode=episode_xxx
-Turn 3: answer=... episode=episode_xxx
-Turn 4: answer=... episode=episode_xxx
-Turn 5: answer=... episode=episode_xxx
-Dashboard: memory_events=N, concepts=N, episodes=N, skills=N, edges=N
-```

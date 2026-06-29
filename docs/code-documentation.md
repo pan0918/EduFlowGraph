@@ -73,7 +73,7 @@ EduFlowGraph 是一个**记忆增强型 AI 辅导引擎**（Memory-Augmented AI 
 - **Embedding Mock**：32 维哈希向量（字符级哈希）
 - **Reranker Mock**：关键词重叠评分
 
-所有模块均可在 Mock 模式下完整运行，支持端到端测试与开发调试。
+所有模块均可在 Mock 模式下完整运行，支持无 API Key 的开发调试。
 
 ---
 

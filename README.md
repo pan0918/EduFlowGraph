@@ -245,10 +245,8 @@ EduFlowGraph/
 ├── scripts/                      # Operational scripts
 │   ├── start_web.py              # Unified launcher (backend + frontend)
 │   ├── migrate_storage.py        # JSON → SQLite migration
-│   ├── export_storage.py         # SQLite → JSON export
-│   └── smoke_run.py              # End-to-end smoke test
+│   └── export_storage.py         # SQLite → JSON export
 │
-├── tests/                        # Python unit tests
 ├── data/                         # Runtime data (SQLite DB, gitignored)
 ├── requirements.txt              # Python dependencies
 └── .env.example                  # Environment variable template
@@ -287,19 +285,6 @@ export EDUFLOW_STORAGE_BACKEND=json
 .venv/bin/python scripts/export_storage.py \
   --database-path data/eduflowgraph.db \
   --output-dir data-export-$(date +%Y%m%d-%H%M%S)
-```
-
-## Testing
-
-```bash
-# Python unit tests
-.venv/bin/python -m unittest discover -s tests
-
-# End-to-end smoke test
-.venv/bin/python scripts/smoke_run.py
-
-# Frontend build check
-cd web && npm run build
 ```
 
 ## License
