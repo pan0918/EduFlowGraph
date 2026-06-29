@@ -18,3 +18,11 @@ data/*.db.tmp
 web/.next/
 web/node_modules
 web/tsconfig.tsbuildinfo
+
+# Non-code artifacts
+*.docx
+*.pptx
+*.pdf
+.docx_work/
+projects/
+docs/group-meeting-project-presentation-plan.md
