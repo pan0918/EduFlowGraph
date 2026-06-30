@@ -119,7 +119,7 @@ Common variables:
 | Variable | Default | Purpose |
 |---|---:|---|
 | `EDUFLOW_PROVIDER` | `openai-compatible` | Runtime provider: `mock` or `openai-compatible` |
-| `OPENAI_API_KEY` | — | API key for the selected OpenAI-compatible endpoint |
+| `OPENAI_API_KEY` | empty | API key for the selected OpenAI-compatible endpoint |
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | API base URL |
 | `EDUFLOW_CHAT_MODEL` | `gpt-4o-mini` | Chat model name |
 | `EDUFLOW_EMBEDDING_MODEL` | `text-embedding-3-small` | Embedding model name |
@@ -166,7 +166,7 @@ curl -N http://127.0.0.1:8000/api/chat/stream \
 
 ```text
 .
-├── eduflowgraph/                 # Python backend package
+├── EduFlowGraph/                 # Python backend package
 │   ├── pipeline.py               # TutorPipeline orchestration
 │   ├── web_app.py                # FastAPI app and API routes
 │   ├── config.py                 # Runtime configuration

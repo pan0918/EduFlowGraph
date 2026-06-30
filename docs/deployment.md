@@ -1,488 +1,326 @@
-# EduFlowGraph 部署文档
+# EduMindFlow 部署文档
 
-> **版本**: 1.0 · **最后更新**: 2026-06-29 · **维护者**: EduFlowGraph Contributors
+> 最后更新: 2026-06-30
+> 说明: GitHub 仓库名和 Python 包名仍为 `EduFlowGraph`。产品展示名称为 `EduMindFlow`。
 
----
+## 1. 适用场景
 
-## 目录
+本文档覆盖三类部署方式:
 
-1. [环境要求](#1-环境要求)
-2. [快速启动（一键运行）](#2-快速启动一键运行)
-3. [手动安装与部署](#3-手动安装与部署)
-4. [环境变量配置](#4-环境变量配置)
-5. [存储后端选择](#5-存储后端选择)
-6. [数据迁移指南](#6-数据迁移指南)
-7. [数据导出与回滚](#7-数据导出与回滚)
-8. [生产环境部署建议](#8-生产环境部署建议)
-9. [故障排查](#9-故障排查)
-10. [运维脚本](#10-运维脚本)
+1. 本地开发: 同时启动 FastAPI 后端和 Next.js 前端。
+2. 本地真实模型调试: 使用 OpenAI-compatible API。
+3. 简单生产部署: 后端使用 Uvicorn 或 Supervisor，前端使用 Next.js 构建产物，Nginx 做反向代理。
 
----
+如果只是快速查看项目，优先使用本地开发方式。
 
-## 1. 环境要求
+## 2. 环境要求
 
-### 1.1 基础环境
-
-| 依赖 | 最低版本 | 推荐版本 | 说明 |
-|------|----------|----------|------|
+| 依赖 | 最低版本 | 建议版本 | 说明 |
+|---|---:|---:|---|
 | Python | 3.10 | 3.11+ | 后端运行时 |
-| Node.js | 18.0 | 20+ | 前端构建与开发服务器 |
-| npm | 8.0 | 10+ | 前端包管理器 |
-| SQLite | 3.35+ | 3.40+ | 嵌入式数据库（Python 内置） |
-| Git | 2.0 | — | 版本控制 |
+| Node.js | 18 | 20+ | 前端开发和构建 |
+| npm | 8 | 10+ | 前端包管理 |
+| SQLite | Python 内置 | 3.40+ | 默认存储后端 |
+| Git | 2.x | 2.x | 克隆和版本管理 |
 
-### 1.2 操作系统兼容性
+支持环境:
 
-| 操作系统 | 状态 | 备注 |
-|----------|------|------|
-| macOS 12+ | ✅ 完全支持 | 主要开发环境 |
-| Ubuntu 20.04+ | ✅ 完全支持 | 推荐生产环境 |
-| Windows 10+ | ⚠️ 实验性 | 需 WSL2 或原生 Python |
+| 系统 | 说明 |
+|---|---|
+| macOS | 当前主要开发环境 |
+| Linux | 推荐生产环境 |
+| Windows | 建议通过 WSL2 运行 |
 
-### 1.3 网络要求
+默认端口:
 
-| 用途 | 端口 | 协议 |
-|------|------|------|
-| FastAPI 后端 | 8000（可配置） | HTTP |
-| Next.js 前端 | 3000（可配置） | HTTP |
-| OpenAI-compatible API | 443 | HTTPS（出站） |
+| 服务 | 默认地址 |
+|---|---|
+| 后端 | `http://127.0.0.1:8000` |
+| 前端 | `http://127.0.0.1:3000` |
 
----
+## 3. 本地启动
 
-## 2. 快速启动（一键运行）
-
-### 2.1 克隆与启动
+### 3.1 克隆仓库
 
 ```bash
-# 克隆仓库
+git clone git@github.com:pan0918/EduFlowGraph.git
+cd EduFlowGraph
+```
+
+如果没有配置 SSH key，也可以使用 HTTPS:
+
+```bash
 git clone https://github.com/pan0918/EduFlowGraph.git
 cd EduFlowGraph
-
-# 一键启动（自动安装依赖、选择端口、启动前后端）
-.venv/bin/python scripts/start_web.py
 ```
 
-> **注意**：首次运行前需先完成 [手动安装](#3-手动安装与部署) 中的 Python 环境和前端依赖步骤。
-
-### 2.2 启动脚本行为
-
-`scripts/start_web.py` 执行以下操作：
-
-1. **端口选择**：从 8000（后端）和 3000（前端）开始扫描，自动选择可用端口
-2. **依赖检查**：若 `web/node_modules` 不存在，自动创建符号链接
-3. **后端启动**：通过 `uvicorn` 启动 FastAPI 应用
-4. **前端启动**：通过 `npm run dev` 启动 Next.js 开发服务器
-5. **健康检查**：等待后端 `/api/health` 和前端就绪
-6. **进程监控**：任一进程退出时自动终止另一个
-
-### 2.3 启动后访问
-
-```
-前端界面: http://127.0.0.1:3000
-后端 API: http://127.0.0.1:8000
-健康检查: http://127.0.0.1:8000/api/health
-```
-
-### 2.4 Mock 模式
-
-系统默认以 **Mock 模式**运行，无需任何 API Key：
-
-- LLM 调用返回确定性的中文模拟回复
-- 嵌入向量使用 32 维哈希生成
-- 重排序使用关键词重叠评分
-
-所有功能（对话、Episode 提取、概念识别、技能蒸馏、画像更新）均可在 Mock 模式下完整运行。
-
----
-
-## 3. 手动安装与部署
-
-### 3.1 Python 环境
+### 3.2 安装 Python 依赖
 
 ```bash
-# 创建虚拟环境
-python3 -m venv .venv
-
-# 激活虚拟环境
-source .venv/bin/activate        # macOS / Linux
-# .venv\Scripts\activate         # Windows
-
-# 安装 Python 依赖
+python -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 3.2 前端依赖
+Windows PowerShell:
+
+```powershell
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+```
+
+### 3.3 安装前端依赖
 
 ```bash
-# 进入前端目录
 cd web
-
-# 安装 Node.js 依赖
 npm install
-
-# 返回项目根目录
 cd ..
 ```
 
-### 3.3 环境变量
+### 3.4 启动服务
 
 ```bash
-# 复制环境变量模板
-cp .env.example .env
-
-# 编辑 .env 文件（可选，Mock 模式下无需配置）
-```
-
-### 3.4 验证安装
-
-```bash
-# 启动服务
 .venv/bin/python scripts/start_web.py
-
-# 验证后端健康
-curl http://127.0.0.1:8000/api/health
-# 预期响应：{"status": "ok"}
 ```
 
----
+启动器会:
 
-## 4. 环境变量配置
+- 启动 FastAPI 后端。
+- 启动 Next.js 开发服务器。
+- 检查端口可用性。
+- 等待后端健康检查和前端就绪。
+- 在任一子进程退出时停止另一个子进程。
 
-### 4.1 完整变量列表
+启动后访问:
 
-| 变量 | 类型 | 默认值 | 描述 |
-|------|------|--------|------|
-| `OPENAI_API_KEY` | string | — | OpenAI-compatible API Key |
-| `OPENAI_BASE_URL` | string | `https://api.openai.com/v1` | API 基础 URL |
-| `EDUFLOW_PROVIDER` | string | `mock` | 提供者模式 |
-| `EDUFLOW_CHAT_MODEL` | string | `gpt-4o-mini` | 聊天模型 ID |
-| `EDUFLOW_EMBEDDING_MODEL` | string | `text-embedding-3-small` | 嵌入模型 ID |
-| `EDUFLOW_RERANKER_MODEL` | string | — | 重排序模型 ID（可选） |
-| `EDUFLOW_EXTRACTION_TURNS` | int | `4` | Episode 提取触发轮次数 |
-| `EDUFLOW_DATA_DIR` | string | `data` | 数据目录路径 |
-| `EDUFLOW_STORAGE_BACKEND` | string | `sqlite` | 存储后端 |
-| `EDUFLOW_DATABASE_PATH` | string | — | SQLite 数据库路径（可选） |
+```text
+前端: http://127.0.0.1:3000
+后端: http://127.0.0.1:8000
+健康检查: http://127.0.0.1:8000/api/health
+```
+
+## 4. Mock 模式和真实模型
+
+### 4.1 Mock 模式
+
+默认 provider 是 `mock`。不配置 API key 时，系统仍可运行完整流程:
+
+- Chat 返回确定性模拟回复。
+- Embedding 使用 32 维哈希向量。
+- Reranker 使用关键词重叠评分。
+
+Mock 模式适合本地开发、UI 调试和离线演示。
 
 ### 4.2 使用真实模型
 
+创建本地环境文件:
+
 ```bash
-# OpenAI 官方 API
-export OPENAI_API_KEY="sk-..."
-export OPENAI_BASE_URL="https://api.openai.com/v1"
-export EDUFLOW_PROVIDER="openai-compatible"
-export EDUFLOW_CHAT_MODEL="gpt-4o-mini"
-export EDUFLOW_EMBEDDING_MODEL="text-embedding-3-small"
-
-# DeepSeek API
-export OPENAI_API_KEY="sk-..."
-export OPENAI_BASE_URL="https://api.deepseek.com/v1"
-export EDUFLOW_PROVIDER="openai-compatible"
-export EDUFLOW_CHAT_MODEL="deepseek-chat"
-export EDUFLOW_EMBEDDING_MODEL="text-embedding-v2"
-
-# SiliconFlow API
-export OPENAI_API_KEY="sk-..."
-export OPENAI_BASE_URL="https://api.siliconflow.cn/v1"
-export EDUFLOW_PROVIDER="openai-compatible"
-export EDUFLOW_CHAT_MODEL="Qwen/Qwen2.5-7B-Instruct"
-export EDUFLOW_EMBEDDING_MODEL="BAAI/bge-large-zh-v1.5"
-
-# 本地 Ollama
-export OPENAI_API_KEY="ollama"
-export OPENAI_BASE_URL="http://localhost:11434/v1"
-export EDUFLOW_PROVIDER="openai-compatible"
-export EDUFLOW_CHAT_MODEL="qwen2.5:7b"
-export EDUFLOW_EMBEDDING_MODEL="nomic-embed-text"
+cp .env.example .env
 ```
 
-### 4.3 前端运行时配置
+常见配置:
 
-除环境变量外，模型配置也可通过前端 Settings 页面实时修改，无需重启后端。前端配置优先级高于环境变量。
+```bash
+export EDUFLOW_PROVIDER="openai-compatible"
+export OPENAI_API_KEY="sk-..."
+export OPENAI_BASE_URL="https://api.openai.com/v1"
+export EDUFLOW_CHAT_MODEL="gpt-4o-mini"
+export EDUFLOW_EMBEDDING_MODEL="text-embedding-3-small"
+```
 
----
+其他兼容服务也可以使用同一套变量，只要接口符合 OpenAI-compatible 格式。
 
-## 5. 存储后端选择
+## 5. 环境变量
 
-### 5.1 SQLite（默认，推荐）
+| 变量 | 默认值 | 说明 |
+|---|---|---|
+| `EDUFLOW_PROVIDER` | `mock` | `mock` 或 `openai-compatible` |
+| `OPENAI_API_KEY` | 空 | 模型服务 API key |
+| `OPENAI_BASE_URL` | `https://api.openai.com/v1` | 模型服务 base URL |
+| `EDUFLOW_CHAT_MODEL` | `gpt-4o-mini` | 聊天模型 |
+| `EDUFLOW_EMBEDDING_MODEL` | `text-embedding-3-small` | 嵌入模型 |
+| `EDUFLOW_RERANKER_MODEL` | 空 | 重排序模型 |
+| `EDUFLOW_EXTRACTION_TURNS` | `4` | 触发片段抽取的轮次数 |
+| `EDUFLOW_DATA_DIR` | `data` | 运行时数据目录 |
+| `EDUFLOW_STORAGE_BACKEND` | `sqlite` | `sqlite` 或 `json` |
+| `EDUFLOW_DATABASE_PATH` | `data/eduflowgraph.db` | SQLite 数据库路径 |
+
+前端 Settings 页面也可以传入运行时模型配置。请求体中的配置优先于环境变量。
+
+## 6. 存储后端
+
+### 6.1 SQLite
+
+SQLite 是默认后端:
 
 ```bash
 export EDUFLOW_STORAGE_BACKEND=sqlite
-# 可选：自定义数据库路径
 export EDUFLOW_DATABASE_PATH=data/eduflowgraph.db
 ```
 
-**特性**：
-- WAL 模式：支持并发读取和后台写入
-- 事务一致性：`BEGIN IMMEDIATE` 保证写入原子性
-- 外键约束：图完整性由数据库层保证
-- 自动 Schema 迁移：v1 → v2 → v3 自动升级
-- 零配置：无需外部数据库服务器
+特点:
 
-### 5.2 JSON/JSONL（遗留后端）
+- 不需要外部数据库服务。
+- 支持 WAL 模式。
+- 支持事务写入。
+- 自动执行 schema 迁移。
+- 运行数据默认位于 `data/`，该目录已被 Git 忽略。
+
+### 6.2 JSON/JSONL
+
+遗留 JSON 后端仍可使用:
 
 ```bash
 export EDUFLOW_STORAGE_BACKEND=json
-export EDUFLOW_DATA_DIR=data
 ```
 
-**特性**：
-- 人类可读：所有数据以 JSON/JSONL 格式存储在磁盘
-- 零依赖：无需 SQLite 或其他数据库
-- 开发友好：可直接查看和编辑数据文件
+它适合调试和迁移回滚，不建议作为长期生产存储。
 
-**数据文件结构**（JSON 后端）：
+## 7. 数据迁移和导出
 
-```
-data/
-├── conversations/
-│   └── session_demo.jsonl        # 对话日志
-├── memory_flow.jsonl              # 记忆事件日志
-├── graph_nodes.json               # 图节点
-├── graph_edges.json               # 图边
-├── learner_profile.json           # 学习者画像
-└── skill_adaptation.json          # 技能适配证据
-```
+### 7.1 JSON 到 SQLite
 
----
-
-## 6. 数据迁移指南
-
-### 6.1 JSON → SQLite 迁移
-
-> **重要**：迁移前请停止 Web 服务。
+预览迁移:
 
 ```bash
-# 步骤 1：预览迁移（不修改任何文件）
-.venv/bin/python scripts/migrate_storage.py \
-  --data-dir data \
-  --dry-run
-
-# 步骤 2：执行迁移
-.venv/bin/python scripts/migrate_storage.py \
-  --data-dir data \
-  --apply
-
-# 步骤 3：验证迁移完整性
-.venv/bin/python scripts/migrate_storage.py \
-  --data-dir data \
-  --verify
+.venv/bin/python scripts/migrate_storage.py --data-dir data --dry-run
 ```
 
-### 6.2 覆盖已存在的空数据库
-
-若 SQLite 数据库已存在但业务表为空：
+执行迁移:
 
 ```bash
-.venv/bin/python scripts/migrate_storage.py \
-  --data-dir data \
-  --apply \
-  --replace-empty
+.venv/bin/python scripts/migrate_storage.py --data-dir data --apply
 ```
 
-### 6.3 迁移注意事项
-
-- 迁移**不会修改**原始 JSON/JSONL 文件
-- 迁移后需将 `EDUFLOW_STORAGE_BACKEND` 设为 `sqlite`
-- 迁移包含数据验证步骤，确保节点、边、画像的完整性
-
----
-
-## 7. 数据导出与回滚
-
-### 7.1 SQLite → JSON 导出
+验证迁移:
 
 ```bash
-# 导出到带时间戳的目录
+.venv/bin/python scripts/migrate_storage.py --data-dir data --verify
+```
+
+### 7.2 SQLite 导出为 JSON
+
+```bash
 .venv/bin/python scripts/export_storage.py \
   --database-path data/eduflowgraph.db \
-  --output-dir data-export-$(date +%Y%m%d-%H%M%S)
+  --output-dir data-export
 ```
 
-### 7.2 回滚到 JSON 后端
+导出结果可用于备份、调试或回滚到 JSON 后端。
+
+## 8. 生产部署建议
+
+### 8.1 后端
+
+后端可以直接通过 Uvicorn 启动:
 
 ```bash
-# 1. 停止 Web 服务
-# 2. 导出当前 SQLite 数据
-.venv/bin/python scripts/export_storage.py \
-  --database-path data/eduflowgraph.db \
-  --output-dir data-rollback
-
-# 3. 切换到 JSON 后端
-export EDUFLOW_STORAGE_BACKEND=json
-export EDUFLOW_DATA_DIR=data-rollback
-
-# 4. 重新启动
-.venv/bin/python scripts/start_web.py
+PYTHONPATH=. .venv/bin/python -m uvicorn EduFlowGraph.web_app:app \
+  --host 0.0.0.0 \
+  --port 8000
 ```
 
----
-
-## 8. 生产环境部署建议
-
-### 8.1 进程管理
-
-使用 `systemd` 或 `supervisor` 管理后端进程：
+Supervisor 示例:
 
 ```ini
-# /etc/supervisor/conf.d/eduflowgraph.conf
-[program:eduflowgraph]
+[program:edumindflow-api]
 command=/opt/EduFlowGraph/.venv/bin/python -m uvicorn EduFlowGraph.web_app:app --host 0.0.0.0 --port 8000
 directory=/opt/EduFlowGraph
-environment=EDUFLOW_STORAGE_BACKEND="sqlite",EDUFLOW_DATA_DIR="/var/lib/eduflowgraph/data"
+environment=PYTHONPATH=".",EDUFLOW_STORAGE_BACKEND="sqlite",EDUFLOW_DATA_DIR="/var/lib/edumindflow/data"
 autostart=true
 autorestart=true
-stderr_logfile=/var/log/eduflowgraph/error.log
-stdout_logfile=/var/log/eduflowgraph/access.log
+stderr_logfile=/var/log/edumindflow/error.log
+stdout_logfile=/var/log/edumindflow/access.log
 ```
 
-### 8.2 前端构建
+### 8.2 前端
+
+构建前端:
 
 ```bash
 cd web
-npm run build    # 生产构建
-npm start        # 启动生产服务器
+npm install
+npm run build
+npm run start
 ```
 
-### 8.3 反向代理（Nginx）
+Next.js 默认监听 `3000`。如果使用进程管理器，请单独管理前端进程。
+
+### 8.3 Nginx 反向代理
 
 ```nginx
 server {
     listen 80;
-    server_name eduflowgraph.example.com;
-
-    location / {
-        proxy_pass http://127.0.0.1:3000;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-    }
+    server_name edumindflow.example.com;
 
     location /api/ {
         proxy_pass http://127.0.0.1:8000;
         proxy_http_version 1.1;
-        proxy_set_header Connection "";
-        proxy_buffering off;           # SSE 流式需要关闭缓冲
-        proxy_cache off;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
     }
 }
 ```
 
-### 8.4 数据备份
+生产环境还需要配置 HTTPS、日志轮转和访问控制。
+
+## 9. 备份
+
+SQLite 备份示例:
 
 ```bash
-# 定期备份 SQLite 数据库
+mkdir -p data/backup
 cp data/eduflowgraph.db data/backup/eduflowgraph_$(date +%Y%m%d).db
-
-# 或导出为 JSON
-.venv/bin/python scripts/export_storage.py \
-  --database-path data/eduflowgraph.db \
-  --output-dir data/backup/json_$(date +%Y%m%d)
 ```
 
-### 8.5 安全建议
-
-- **API Key 管理**：使用环境变量或 secrets manager，不要硬编码
-- **CORS 配置**：生产环境中限制 `allow_origins` 为实际域名
-- **HTTPS**：通过反向代理启用 TLS
-- **数据目录权限**：确保 SQLite 数据库文件权限为 `600`
-
----
-
-## 9. 故障排查
-
-### 9.1 常见问题
-
-| 问题 | 原因 | 解决方案 |
-|------|------|----------|
-| `ModuleNotFoundError: EduFlowGraph` | PYTHONPATH 未设置 | 使用 `scripts/start_web.py` 启动，或手动设置 `PYTHONPATH=.` |
-| `Port already in use` | 端口被占用 | 启动脚本会自动选择下一个可用端口 |
-| `no such table: sessions` | 数据库未初始化 | 删除 `data/eduflowgraph.db` 后重启 |
-| `FOREIGN KEY constraint failed` | 图边引用了不存在的节点 | 运行 `PRAGMA quick_check` 检查数据库完整性 |
-| 前端白屏 | API 连接失败 | 检查后端是否运行，确认 `NEXT_PUBLIC_API_BASE` 配置 |
-| Mock 模式下无响应 | LLM mock 未触发 | 确认 `EDUFLOW_PROVIDER=mock` |
-
-### 9.2 诊断端点
+也可以导出为 JSON:
 
 ```bash
-# 健康检查
-curl http://127.0.0.1:8000/api/health
+.venv/bin/python scripts/export_storage.py \
+  --database-path data/eduflowgraph.db \
+  --output-dir data/backup/export_$(date +%Y%m%d)
+```
 
-# 模型连接测试
+备份前建议暂停写入流量，或在低流量窗口执行。
+
+## 10. 故障排查
+
+| 现象 | 常见原因 | 处理 |
+|---|---|---|
+| `ModuleNotFoundError: EduFlowGraph` | 未从仓库根目录启动或缺少 `PYTHONPATH` | 在根目录运行命令，或设置 `PYTHONPATH=.` |
+| 前端无法访问 API | 后端未启动或端口不同 | 检查 `/api/health` 和启动日志 |
+| 模型请求失败 | API key、base URL 或模型名错误 | 使用 `/api/diagnostics/model-test` 检查 |
+| SQLite 表不存在 | 数据库未初始化或路径错误 | 检查 `EDUFLOW_DATABASE_PATH`，必要时删除空库后重启 |
+| SSE 没有持续输出 | 代理缓冲或连接被中断 | 检查 Nginx 配置和浏览器网络面板 |
+
+常用诊断命令:
+
+```bash
+curl http://127.0.0.1:8000/api/health
 curl -X POST http://127.0.0.1:8000/api/diagnostics/model-test \
   -H "Content-Type: application/json" \
-  -d '{"kind": "llm"}'
+  -d '{"kind":"llm","provider":"mock"}'
 ```
 
-### 9.3 日志查看
+## 11. 发布前检查
+
+建议在提交或部署前运行:
 
 ```bash
-# 后端日志（uvicorn）
-tail -f /var/log/eduflowgraph/access.log
-
-# 前端日志
-# 查看浏览器开发者工具 Console
+.venv/bin/python -m unittest discover -s tests
+node --test $(rg --files web -g '*.test.mjs')
+cd web && npm run build
 ```
-
----
-
-## 10. 运维脚本
-
-### 10.1 `scripts/start_web.py` — 统一启动器
-
-**功能**：同时启动后端（uvicorn）和前端（npm dev），自动选择可用端口。
-
-**环境变量**：
-
-| 变量 | 默认值 | 描述 |
-|------|--------|------|
-| `BACKEND_PORT` | `0`（自动） | 后端端口 |
-| `FRONTEND_PORT` | `0`（自动） | 前端端口 |
-
-**用法**：
-
-```bash
-.venv/bin/python scripts/start_web.py
-```
-
-### 10.2 `scripts/migrate_storage.py` — 数据迁移
-
-**功能**：JSON/JSONL → SQLite 数据迁移。
-
-**参数**：
-
-| 参数 | 类型 | 默认值 | 描述 |
-|------|------|--------|------|
-| `--data-dir` | Path | `data` | 源数据目录 |
-| `--database-path` | Path | `{data-dir}/eduflowgraph.db` | 目标数据库路径 |
-| `--replace-empty` | flag | — | 覆盖已存在的空数据库 |
-| `--dry-run` | flag | — | 仅预览，不修改文件 |
-| `--apply` | flag | — | 执行迁移 |
-| `--verify` | flag | — | 验证迁移完整性 |
-
-**用法**：
-
-```bash
-.venv/bin/python scripts/migrate_storage.py --data-dir data --dry-run
-.venv/bin/python scripts/migrate_storage.py --data-dir data --apply
-.venv/bin/python scripts/migrate_storage.py --data-dir data --verify
-```
-
-### 10.3 `scripts/export_storage.py` — 数据导出
-
-**功能**：SQLite → JSON 数据导出。
-
-**参数**：
-
-| 参数 | 类型 | 默认值 | 描述 |
-|------|------|--------|------|
-| `--database-path` | Path | `data/eduflowgraph.db` | 源数据库路径 |
-| `--output-dir` | Path | —（必填） | 导出目标目录 |
-
-**用法**：
-
-```bash
-.venv/bin/python scripts/export_storage.py \
-  --database-path data/eduflowgraph.db \
-  --output-dir data-export-$(date +%Y%m%d-%H%M%S)
-```
-
