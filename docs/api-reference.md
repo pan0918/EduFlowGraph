@@ -1,13 +1,8 @@
 # EduMindFlow API 文档
 
-> 最后更新: 2026-06-30
-> Base URL: `http://127.0.0.1:8000`
-
 ## 1. 概述
 
-EduMindFlow 后端由 FastAPI 提供服务。所有业务端点都以 `/api/` 开头。聊天接口支持普通 JSON 响应和 SSE 流式响应。
-
-当前后端定义在 `EduFlowGraph/web_app.py`，共有 10 个 API 端点:
+EduMindFlow 后端由 FastAPI 提供服务。默认本地地址为 `http://127.0.0.1:8000`。所有业务端点都以 `/api/` 开头，聊天接口支持普通 JSON 响应和 SSE 流式响应。
 
 | 方法 | 路径 | 用途 |
 |---|---|---|

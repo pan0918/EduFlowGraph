@@ -1,8 +1,5 @@
 # EduMindFlow 部署文档
 
-> 最后更新: 2026-06-30
-> 说明: GitHub 仓库名和 Python 包名仍为 `EduFlowGraph`。产品展示名称为 `EduMindFlow`。
-
 ## 1. 适用场景
 
 本文档覆盖三类部署方式:
