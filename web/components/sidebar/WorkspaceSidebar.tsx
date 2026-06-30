@@ -43,7 +43,7 @@ export function WorkspaceSidebar() {
         </div>
         <div>
           <div className="font-semibold tracking-tight text-[var(--foreground)]">
-            EduFlowGraph
+            EduMindFlow
           </div>
           <div className="text-[11px] tracking-wide text-[var(--muted-foreground)]">个性化导师系统</div>
         </div>

@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "EduFlowGraph",
+  title: "EduMindFlow",
   description: "Memory-augmented AI tutoring engine with multi-dimensional learner profiling",
 };
 

@@ -26,3 +26,11 @@ web/tsconfig.tsbuildinfo
 .docx_work/
 projects/
 docs/group-meeting-project-presentation-plan.md
+
+# Local design notes and internal execution/test records
+EduFlowGraph_Lite_*.md
+Skill_Node_and_Episode_Skill_Edge*.md
+用户画像*.md
+项目重构.md
+docs/superpowers/
+docs/testing/
